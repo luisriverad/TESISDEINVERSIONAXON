@@ -2,6 +2,8 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 're
 import { compute, type Model, type Result, type MCell, type GCell, type Series, type PLKey } from './lib/engine';
 import DATA from './data/model.json';
 import LOGO from './assets/axon-logo.png';
+import AMERICAS from './data/americas.json';
+import { geoArea, geoAzimuthalEqualArea, geoPath } from 'd3-geo';
 
 // ===================== Marca AXON =====================
 const C = {
@@ -71,7 +73,7 @@ function NumInput({ value, onChange, kind = 'money', width = 96, step, quiet, sm
 
 function Card({ title, sub, right, children, pad = true, eyebrow }: { title?: string; sub?: string; right?: React.ReactNode; children: React.ReactNode; pad?: boolean; eyebrow?: string }) {
   const mt = title?.match(/^(\d+) · (.+)$/);
-  const eb = eyebrow ?? (mt ? `Paso 0${mt[1]}` : undefined), tt = mt ? mt[2] : title;
+  const eb = eyebrow, tt = mt ? mt[2] : title;
   return (
     <section style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 18, overflow: 'hidden' }}>
       {title && (
@@ -251,7 +253,7 @@ function BarChart({ labels, series, height = 260, showLabels, fine = true }: { l
 
 function LineChart({ points, height = 260, refLine, color = C.ink, fine = true }: { points: { x: number; y: number; label: string; dashed?: boolean }[]; height?: number; refLine?: number; color?: string; fine?: boolean }) {
   const [ref, w] = useWidth(); const [hi, setHi] = useState<number | null>(null);
-  const m = { l: 60, r: 28, t: 16, b: 28 }, iw = w - m.l - m.r, ih = height - m.t - m.b;
+  const m = { l: 60, r: 28, t: fine ? 28 : 16, b: 28 }, iw = w - m.l - m.r, ih = height - m.t - m.b;
   const ys = points.map(p => p.y), ticks = niceTicks(Math.min(0, ...ys), Math.max(0, ...ys));
   const y0 = ticks[0], y1 = ticks[ticks.length - 1], x0 = points[0].x, x1 = points[points.length - 1].x;
   const X = (x: number) => m.l + ((x - x0) / (x1 - x0 || 1)) * iw, Y = (v: number) => m.t + ih - ((v - y0) / (y1 - y0)) * ih;
@@ -263,6 +265,9 @@ function LineChart({ points, height = 260, refLine, color = C.ink, fine = true }
     let best = 0; points.forEach((p, i) => { if (Math.abs(X(p.x) - mx) < Math.abs(X(points[best].x) - mx)) best = i; }); setHi(best);
   };
   const p = hi != null ? points[hi] : null;
+  // Etiquetas de datos (modo fino): punto más bajo, último mes real y cierres anuales
+  const minI = ys.indexOf(Math.min(...ys)), lastM = dashIdx > 0 ? dashIdx - 1 : points.length - 1;
+  const tagIdx = fine ? points.map((q, i) => i).filter(i => i === minI || i === lastM || points[i].dashed) : [];
   return (
     <div ref={ref} style={{ position: 'relative' }}>
       <svg width={w} height={height} onMouseMove={onMove} onMouseLeave={() => setHi(null)} role="img" aria-label="Resultado acumulado">
@@ -280,6 +285,19 @@ function LineChart({ points, height = 260, refLine, color = C.ink, fine = true }
         <path d={path(solid)} fill="none" stroke={color} strokeWidth={fine ? 1.25 : 2} strokeLinejoin="round" />
         {dashed.length > 0 && <path d={path(dashed)} fill="none" stroke={color} strokeWidth={fine ? 1.25 : 2} strokeDasharray={fine ? '3 4' : '5 4'} />}
         {dashed.slice(1).map(q => <circle key={q.x} cx={X(q.x)} cy={Y(q.y)} r={fine ? 3 : 4} fill={C.surface} stroke={color} strokeWidth={fine ? 1.25 : 2} />)}
+        {tagIdx.map(i => {
+          const q = points[i], neg = q.y < 0, last = i === points.length - 1, low = i === minI;
+          // Negativos: la etiqueta va arriba de la línea de $0 con una guía fina al punto
+          const cx = X(q.x), cy = Y(q.y), ty = neg ? Y(0) - 9 : cy - 9;
+          return (
+            <g key={'t' + i} style={{ opacity: hi != null && hi !== i ? 0.35 : 1, transition: 'opacity .15s' }}>
+              {neg && <line x1={cx} x2={cx} y1={cy - 4} y2={Y(0) - 4} stroke={C.neg} strokeOpacity={0.45} strokeWidth={0.75} strokeDasharray="1.5 2" />}
+              {!q.dashed && <circle cx={cx} cy={cy} r={2.25} fill={neg ? C.neg : color} />}
+              <text x={last ? cx + 4 : cx} y={ty} textAnchor={last ? 'end' : 'middle'}
+                style={{ font: `${q.dashed || low ? 600 : 400} 10.5px ${FONT}`, fill: neg ? C.neg : C.ink, fontVariantNumeric: 'tabular-nums', letterSpacing: '-0.01em', paintOrder: 'stroke', stroke: C.surface, strokeWidth: 3, strokeLinejoin: 'round' }}>{low && <tspan style={{ fontWeight: 300, fill: C.faint }}>Mín. </tspan>}{short(q.y)}</text>
+            </g>
+          );
+        })}
         {points.filter((q, i) => i % 6 === 0 || q.dashed).map(q => (
           <text key={'l' + q.x} x={X(q.x)} y={height - 8} textAnchor="middle" style={{ font: `${fine ? 300 : 450} ${fine ? 10.5 : 11}px ${FONT}`, fill: fine ? C.faint : C.muted, letterSpacing: fine ? '.06em' : undefined }}>{q.label}</text>
         ))}
@@ -319,16 +337,16 @@ function Resumen({ R, M }: { R: Result; M: Model }) {
     <div style={{ display: 'grid', gap: 20 }}>
       <FineKpis items={kpis} />
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: 20 }}>
-        <Card eyebrow="01 · Crecimiento" title="Ventas y utilidad neta por año" sub="Escenario Meta">
+        <Card eyebrow="Crecimiento" title="Ventas y utilidad neta por año" sub="Escenario Meta">
           <Legend fine items={[{ c: C.graphite, l: 'Ventas totales' }, { c: C.gold, l: 'Utilidad neta (% de ventas)' }]} />
           <BarChart fine labels={YEARS_S} showLabels series={[{ name: 'Ventas', color: C.graphite, values: A.venta }, { name: 'Utilidad neta', color: C.gold, values: A.un, fmt: (v, i) => pct(ratio(v, A.venta[i])) }]} />
         </Card>
-        <Card eyebrow="02 · Liquidez" title="Resultado acumulado" sub="Curva J · mensual nov-25 a dic-27, cierres anuales 2028–2030">
+        <Card eyebrow="Liquidez" title="Resultado acumulado" sub="Curva J · mensual nov-25 a dic-27, cierres anuales 2028–2030">
           <Legend fine items={[{ c: C.ink, l: 'Resultado acumulado' }, { c: C.ink, l: 'Cierre anual', dash: true }]} />
           <LineChart fine points={pts} refLine={0} />
         </Card>
       </div>
-      <Card eyebrow="03 · Estado de resultados" title="Estado de resultados resumido" sub="MXN nominales" pad={false}>
+      <Card eyebrow="Estado de resultados" title="Estado de resultados resumido" sub="MXN nominales" pad={false}>
         <PLTable fine cols={YEARS} data={A} rows={SUMMARY_ROWS} acum={R.acumY} />
       </Card>
     </div>
@@ -751,7 +769,7 @@ function Valuacion({ M, R, set }: { M: Model; R: Result; set: (f: (m: Model) => 
       ]} />
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 16, alignItems: 'start' }}>
-        <Card title="1 · Tasa de descuento (WACC)" sub="CAPM en pesos con primas por tamaño y etapa">
+        <Card title="Tasa de descuento (WACC)" sub="CAPM en pesos con primas por tamaño y etapa">
           <KV l="Bono M 10 años (México)">{inp('bono')}</KV>
           <KV l="(−) Spread de default soberano">{inp('spread')}</KV>
           <KV l="Tasa libre de riesgo en pesos" strong>{pct(v.rf, 2)}</KV>
@@ -784,7 +802,7 @@ function Valuacion({ M, R, set }: { M: Model; R: Result; set: (f: (m: Model) => 
                 <span style={{ font: `650 12px ${FONT}`, padding: '4px 10px', borderRadius: 999, background: v.cumple ? C.posSoft : C.negSoft, color: v.cumple ? C.pos : C.neg }}>{v.cumple ? '✓ Cumple' : '✕ No cumple'}</span></span>
             </div>
           </Card>
-          <Card title="2 · Flujo libre y valor terminal">
+          <Card title="Flujo libre y valor terminal">
             <KV l="D&A (% de ventas)">{inp('da')}</KV>
             <KV l="CAPEX (% de ventas)">{inp('capex')}</KV>
             <KV l="Capital de trabajo (% del aumento en ventas)">{inp('ct')}</KV>
@@ -795,7 +813,7 @@ function Valuacion({ M, R, set }: { M: Model; R: Result; set: (f: (m: Model) => 
         </div>
       </div>
 
-      <Card title="3 · Flujo libre de caja y descuento" sub="Descuento a mitad de año; valor terminal descontado 4.0 años" pad={false}>
+      <Card title="Flujo libre de caja y descuento" sub="Descuento a mitad de año; valor terminal descontado 4.0 años" pad={false}>
         <ScrollX>
           <table style={{ borderCollapse: 'separate', borderSpacing: 0, width: '100%' }}>
             <thead><tr><th style={{ ...th, ...stickyL, background: C.surface, minWidth: 240 }}>Concepto</th>{fy.map(y => <th key={y} style={th}>{y}</th>)}</tr></thead>
@@ -816,7 +834,7 @@ function Valuacion({ M, R, set }: { M: Model; R: Result; set: (f: (m: Model) => 
         </ScrollX>
       </Card>
 
-      <Card title="4 · Del valor de la empresa al valor del capital" sub={`Valor terminal al cierre de 2030: ${short(v.tv)} (flujo terminal ${short(v.fcffT)} ÷ (WACC − g))`}>
+      <Card title="Del valor de la empresa al valor del capital" sub={`Valor terminal al cierre de 2030: ${short(v.tv)} (flujo terminal ${short(v.fcffT)} ÷ (WACC − g))`}>
         <div style={{ display: 'grid', gap: 8 }}>
           {bridge.map(b => (
             <div key={b.l} style={{ display: 'grid', gridTemplateColumns: 'minmax(170px, 230px) 1fr 90px', alignItems: 'center', gap: 12 }}>
@@ -838,9 +856,176 @@ function Valuacion({ M, R, set }: { M: Model; R: Result; set: (f: (m: Model) => 
   );
 }
 
+// ===================== Módulo: Mercado =====================
+type Market = { id: string; name: string; note?: string; geo: string[]; lo: number; hi: number; src: string; srcShort: string; lab?: [number, number] };
+const MARKETS: Market[] = [
+  { id: 'mx', name: 'México', geo: ['Mexico'], lo: 35000, hi: 49000, src: 'Censos Económicos 2024 del INEGI.', srcShort: 'INEGI, Censos Económicos 2024', lab: [-100, 28] },
+  { id: 'us', name: 'Estados Unidos', note: 'Solo empresas latinas / hispanas', geo: ['United States of America'], lo: 15000, hi: 22000, src: 'Encuesta Anual de Negocios (Annual Business Survey – ABS) del U.S. Census Bureau.', srcShort: 'U.S. Census Bureau, ABS', lab: [-125, -40] },
+  { id: 'pe', name: 'Perú', geo: ['Peru'], lo: 15000, hi: 16500, src: 'Estructura Empresarial del INEI y estadísticas del Ministerio de la Producción (PRODUCE).', srcShort: 'INEI y PRODUCE', lab: [-58, 6] },
+  { id: 'co', name: 'Colombia', geo: ['Colombia'], lo: 13000, hi: 16000, src: 'Registro Único Empresarial y Social (RUES) de Confecámaras bajo los rangos del Decreto 957.', srcShort: 'RUES, Confecámaras (Decreto 957)', lab: [62, -48] },
+  { id: 'cl', name: 'Chile', geo: ['Chile'], lo: 13000, hi: 15500, src: 'Estadísticas de Empresas por Tamaño del Servicio de Impuestos Internos (SII) y el Ministerio de Economía.', srcShort: 'SII y Ministerio de Economía', lab: [-48, 0] },
+  { id: 'ar', name: 'Argentina', geo: ['Argentina'], lo: 12000, hi: 15000, src: 'Observatorio de Empleo y Dinámica Empresarial (OEDE) del Ministerio de Capital Humano / Secretaría de Trabajo y parámetros de la SEPyME.', srcShort: 'OEDE y SEPyME', lab: [92, 22] },
+  { id: 'ca', name: 'Centroamérica', note: 'Bloque regional', geo: ['Guatemala', 'Belize', 'Honduras', 'El Salvador', 'Nicaragua', 'Costa Rica', 'Panama'], lo: 7500, hi: 11000, src: 'Sistema de Información Regional de la MIPYME (SIRMIPYME) de CENPROMYPE / SICA y directorios estadísticos nacionales.', srcShort: 'SIRMIPYME, CENPROMYPE / SICA', lab: [-70, 22] },
+  { id: 'ec', name: 'Ecuador', geo: ['Ecuador'], lo: 5370, hi: 5370, src: 'Registro Estadístico de Empresas (REEM) del INEC y la Superintendencia de Compañías, Valores y Seguros (SCVS).', srcShort: 'INEC (REEM) y SCVS', lab: [-62, -4] },
+];
+const geoToMarket = new Map(MARKETS.flatMap(m => m.geo.map(g => [g, m] as const)));
+const mid = (m: Market) => (m.lo + m.hi) / 2;
+const kfmt = (n: number) => `${+(n / 1000).toFixed(n % 1000 ? 1 : 0)}k`;
+const rangeK = (m: Market) => m.lo === m.hi ? `~${kfmt(m.lo)}` : `${+(m.lo / 1000).toFixed(m.lo % 1000 ? 1 : 0)}–${kfmt(m.hi)}`;
+const rangeFull = (m: Market) => m.lo === m.hi ? `~${int(m.lo)}` : `${int(m.lo)} – ${int(m.hi)}`;
+const int = (n: number) => Math.round(n).toLocaleString('en-US');
+function lerpHex(a: string, b: string, t: number) {
+  const p = (h: string) => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+  const [x, y] = [p(a), p(b)];
+  return '#' + x.map((v, i) => Math.round(v + (y[i] - v) * t).toString(16).padStart(2, '0')).join('');
+}
+
+function MarketMap({ sel, onSel }: { sel: string; onSel: (id: string) => void }) {
+  const W = 620, H = 700;
+  const [hov, setHov] = useState<string | null>(null);
+  const { paths, labels } = useMemo(() => {
+    const feats = (AMERICAS as unknown as GeoJSON.FeatureCollection<GeoJSON.Geometry, { name: string }>).features;
+    // Al simplificar, algunos anillos quedan con orientación invertida (cubrirían todo el globo): se corrigen
+    const fixPoly = (rings: GeoJSON.Position[][]) => geoArea({ type: 'Polygon', coordinates: rings }) > 2 * Math.PI ? rings.map(r => [...r].reverse()) : rings;
+    feats.forEach(f => {
+      const g = f.geometry;
+      if (g.type === 'Polygon') g.coordinates = fixPoly(g.coordinates);
+      else if (g.type === 'MultiPolygon') g.coordinates = g.coordinates.map(fixPoly);
+    });
+    const fit = { type: 'FeatureCollection', features: feats.filter(f => !['Canada', 'Falkland Is.'].includes(f.properties.name)) } as GeoJSON.FeatureCollection;
+    const proj = geoAzimuthalEqualArea().rotate([82, -8]).fitExtent([[16, 6], [W - 16, H - 6]], fit);
+    const gp = geoPath(proj);
+    const paths = feats.map(f => ({ name: f.properties.name, d: gp(f) ?? '', m: geoToMarket.get(f.properties.name) }));
+    const labels = MARKETS.map(m => {
+      const fs = feats.filter(f => m.geo.includes(f.properties.name));
+      const target = m.id === 'us' ? proj([-97, 38]) : m.id === 'ca' ? proj([-86, 13.8]) : m.id === 'cl' ? proj([-71, -31]) : gp.centroid({ type: 'FeatureCollection', features: fs } as GeoJSON.FeatureCollection);
+      const [x, y] = target ?? [0, 0];
+      const [dx, dy] = m.lab ?? [0, 0];
+      return { m, x, y, lx: x + dx, ly: y + dy, right: dx > 0 };
+    });
+    return { paths, labels };
+  }, []);
+  const maxMid = Math.max(...MARKETS.map(mid));
+  const fill = (m?: Market) => m ? lerpHex('#FBF0C6', '#E6B92C', Math.pow(mid(m) / maxMid, 0.9)) : '#EFEDE7';
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto', display: 'block' }} role="img" aria-label="Mapa de mercado: EUA y Latinoamérica">
+      <defs>
+        <pattern id="mk-dots" width="7" height="7" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r=".7" fill={C.line} /></pattern>
+      </defs>
+      <rect width={W} height={H} fill="url(#mk-dots)" opacity={.35} />
+      {paths.map((p, i) => {
+        const on = p.m && (p.m.id === sel || p.m.id === hov);
+        return (
+          <path key={i} d={p.d} fill={fill(p.m)} stroke="#fff" strokeWidth={.5} strokeLinejoin="round"
+            style={{ cursor: p.m ? 'pointer' : 'default', transition: 'opacity .15s, filter .15s', opacity: hov && p.m && p.m.id !== hov && p.m.id !== sel ? .55 : 1, filter: on ? 'brightness(.96)' : undefined }}
+            onMouseEnter={() => p.m && setHov(p.m.id)} onMouseLeave={() => setHov(null)} onClick={() => p.m && onSel(p.m.id)}>
+            {p.m && <title>{p.m.name}: {rangeFull(p.m)} empresas</title>}
+          </path>
+        );
+      })}
+      {/* contorno del seleccionado, encima de todo */}
+      {paths.filter(p => p.m?.id === sel).map((p, i) => <path key={'s' + i} d={p.d} fill="none" stroke={C.ink} strokeWidth={.75} strokeLinejoin="round" pointerEvents="none" />)}
+      {labels.map(({ m, x, y, lx, ly, right }) => {
+        const on = m.id === sel;
+        return (
+          <g key={m.id} style={{ cursor: 'pointer' }} onClick={() => onSel(m.id)} onMouseEnter={() => setHov(m.id)} onMouseLeave={() => setHov(null)}>
+            <line x1={x} y1={y} x2={right ? lx - 4 : lx + 4} y2={ly - 4} stroke={C.faint} strokeWidth={.5} /><circle cx={x} cy={y} r={1.4} fill={C.ink2} />
+            <text x={lx} y={ly - 8} textAnchor={right ? 'start' : 'end'} style={{ font: `${on ? 600 : 400} 8px ${FONT}`, letterSpacing: '.16em', textTransform: 'uppercase', fill: on ? C.ink : C.muted}}>{m.id === 'us' ? 'EUA' : m.name}</text>
+            <text x={lx} y={ly + 7} textAnchor={right ? 'start' : 'end'} style={{ font: `${on ? 400 : 200} 13px ${FONT}`, letterSpacing: '-0.01em', fill: C.ink, fontVariantNumeric: 'tabular-nums'}}>{rangeK(m)}</text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+function Mercado() {
+  const [sel, setSel] = useState('mx');
+  const m = MARKETS.find(x => x.id === sel)!;
+  const ranked = [...MARKETS].sort((a, b) => mid(b) - mid(a));
+  const totLo = MARKETS.reduce((s, x) => s + x.lo, 0), totHi = MARKETS.reduce((s, x) => s + x.hi, 0), totMid = (totLo + totHi) / 2;
+  const scaleMax = 50000;
+  const share = mid(m) / totMid;
+  const rank = ranked.findIndex(x => x.id === sel) + 1;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+      <FineKpis items={[
+        { label: 'Empresas objetivo', sub: 'Ventas > US$5M', value: `${kfmt(totLo)}–${kfmt(totHi)}`, note: 'Suma de los 8 mercados identificados' },
+        { label: 'México', sub: 'Mercado principal', value: rangeK(MARKETS[0]), note: `~${pct(mid(MARKETS[0]) / totMid, 0)} del total` },
+        { label: 'EUA hispano', sub: 'Empresas latinas', value: rangeK(MARKETS[1]), note: `~${pct(mid(MARKETS[1]) / totMid, 0)} del total` },
+        { label: 'Sudamérica', sub: 'Perú, Colombia, Chile, Arg., Ecuador', value: `${kfmt(MARKETS.filter(x => ['pe', 'co', 'cl', 'ar', 'ec'].includes(x.id)).reduce((s, x) => s + x.lo, 0))}–${kfmt(MARKETS.filter(x => ['pe', 'co', 'cl', 'ar', 'ec'].includes(x.id)).reduce((s, x) => s + x.hi, 0))}`, note: 'Cinco países' },
+      ]} />
+      <div className="axon-two" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.25fr) minmax(0, 1fr)', gap: 18, alignItems: 'start' }}>
+        <Card eyebrow="Mercado potencial" title="Empresas con ventas mayores a US$5M" sub="EUA y Latinoamérica · toca un país para ver su detalle" pad={false}>
+          <div style={{ padding: '0 18px 6px' }}><MarketMap sel={sel} onSel={setSel} /></div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '0 24px 18px', font: `300 10.5px ${FONT}`, color: C.faint }}>
+            <span>Menos</span>
+            <span style={{ width: 120, height: 6, borderRadius: 99, background: `linear-gradient(90deg, #FBF0C6, #E6B92C)` }} />
+            <span>Más empresas</span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginLeft: 12 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: '#EFEDE7' }} />Sin estimación</span>
+          </div>
+        </Card>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+          <Card eyebrow={`#${rank} de ${MARKETS.length} mercados`} title={m.name} sub={m.note}>
+            <div style={{ font: `200 40px/1 ${FONT}`, letterSpacing: '-0.035em', fontVariantNumeric: 'tabular-nums' }}>{rangeFull(m)}</div>
+            <div style={{ font: `300 12.5px ${FONT}`, color: C.muted, marginTop: 8 }}>empresas con ventas anuales mayores a US$5M</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', marginTop: 20, borderTop: `1px solid ${C.line2}` }}>
+              <div style={{ padding: '14px 0 0' }}>
+                <div style={{ font: `650 10px ${FONT}`, textTransform: 'uppercase', letterSpacing: '.16em' }}>Participación</div>
+                <div style={{ font: `250 24px ${FONT}`, marginTop: 6 }}>~{pct(share, 0)}</div>
+                <div style={{ font: `300 11px ${FONT}`, color: C.faint }}>del mercado identificado</div>
+              </div>
+              <div style={{ padding: '14px 0 0 18px', borderLeft: `1px solid ${C.line2}` }}>
+                <div style={{ font: `650 10px ${FONT}`, textTransform: 'uppercase', letterSpacing: '.16em' }}>Punto medio</div>
+                <div style={{ font: `250 24px ${FONT}`, marginTop: 6 }}>{int(mid(m))}</div>
+                <div style={{ font: `300 11px ${FONT}`, color: C.faint }}>empresas</div>
+              </div>
+            </div>
+            <div style={{ marginTop: 18, font: `300 10px/1.45 ${FONT}`, color: C.faint }}>Fuente: {m.src}</div>
+          </Card>
+          <Card eyebrow="Comparativo" title="Empresas por mercado" sub="Número estimado de empresas con ventas > US$5M">
+            <div style={{ position: 'relative' }}>
+              {/* líneas guía cada 10k */}
+              <div style={{ position: 'absolute', inset: '0 64px 0 112px', pointerEvents: 'none' }}>
+                {[0, 10, 20, 30, 40, 50].map(t => <span key={t} style={{ position: 'absolute', top: 0, bottom: 0, left: `${t * 2}%`, borderLeft: `1px ${t ? 'dashed' : 'solid'} ${t ? C.line2 : C.line}` }} />)}
+              </div>
+              {ranked.map(x => {
+                const on = x.id === sel;
+                return (
+                  <button key={x.id} onClick={() => setSel(x.id)}
+                    style={{ all: 'unset', boxSizing: 'border-box', width: '100%', cursor: 'pointer', position: 'relative', display: 'grid', gridTemplateColumns: '112px 1fr 64px', alignItems: 'center', padding: '8px 0' }}>
+                    <span style={{ font: `${on ? 600 : 300} 12px ${FONT}`, color: on ? C.ink : C.ink2, whiteSpace: 'nowrap', paddingRight: 12 }}>{x.id === 'us' ? 'EUA (hispanas)' : x.name}</span>
+                    <span style={{ position: 'relative', height: 9, display: 'flex' }}>
+                      <span style={{ width: `${x.lo / scaleMax * 100}%`, background: on ? C.ink : C.yellow, borderRadius: '2px 0 0 2px', transition: 'background .15s' }} />
+                      <span style={{ width: `${(x.hi - x.lo) / scaleMax * 100}%`, background: on ? 'repeating-linear-gradient(135deg, #3A3D42 0 2px, #6B6E76 2px 4px)' : `repeating-linear-gradient(135deg, ${C.yellow} 0 2px, #FBE59A 2px 4px)`, borderRadius: '0 2px 2px 0' }} />
+                    </span>
+                    <span style={{ font: `${on ? 500 : 300} 12px ${FONT}`, color: on ? C.ink : C.muted, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{rangeK(x)}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '112px 1fr 64px', marginTop: 4, font: `300 9.5px ${FONT}`, color: C.faint, fontVariantNumeric: 'tabular-nums' }}>
+              <span /><span style={{ position: 'relative', height: 12 }}>{[0, 10, 20, 30, 40, 50].map(t => <span key={t} style={{ position: 'absolute', left: `${t * 2}%`, transform: t ? 'translateX(-50%)' : undefined }}>{t ? `${t}k` : '0'}</span>)}</span><span />
+            </div>
+            <div style={{ display: 'flex', gap: 18, marginTop: 16, font: `300 10.5px ${FONT}`, color: C.muted }}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ width: 14, height: 8, borderRadius: 2, background: C.yellow }} />Mínimo estimado</span>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ width: 14, height: 8, borderRadius: 2, background: `repeating-linear-gradient(135deg, ${C.yellow} 0 2px, #FBE59A 2px 4px)` }} />Hasta el máximo</span>
+            </div>
+          </Card>
+        </div>
+      </div>
+      <div style={{ font: `300 9.5px/1.6 ${FONT}`, color: C.faint, padding: '0 4px' }}>
+        <span style={{ fontWeight: 600, letterSpacing: '.12em', textTransform: 'uppercase', marginRight: 6 }}>Fuentes</span>
+        {MARKETS.map((x, i) => <span key={x.id}>{i ? ' · ' : ''}{x.id === 'us' ? 'EUA' : x.name}: {x.srcShort}</span>)}.
+        {' '}Cifras aproximadas; EUA considera solo empresas de propietarios latinos / hispanos.
+      </div>
+    </div>
+  );
+}
+
 // ===================== Plataforma =====================
 const MODULES = [
-  { id: 'resumen', l: 'Resumen' }, { id: 'pl', l: 'P&L' }, { id: 'gastos', l: 'Gastos' }, { id: 'credito', l: 'Crédito bancario' }, { id: 'valuacion', l: 'Valuación' },
+  { id: 'resumen', l: 'Resumen' }, { id: 'pl', l: 'P&L' }, { id: 'gastos', l: 'Gastos' }, { id: 'credito', l: 'Crédito bancario' }, { id: 'valuacion', l: 'Valuación' }, { id: 'mercado', l: 'Mercado' },
 ] as const;
 type ModId = typeof MODULES[number]['id'];
 
@@ -944,6 +1129,7 @@ export default function AxonPLForecast() {
         {mod === 'gastos' && <Gastos M={M} R={R} set={set} />}
         {mod === 'credito' && <Credito M={M} R={R} set={set} />}
         {mod === 'valuacion' && <Valuacion M={M} R={R} set={set} />}
+        {mod === 'mercado' && <Mercado />}
       </main>
 
       <footer style={{ borderTop: `1px solid ${C.line}`, background: C.surface }}>
