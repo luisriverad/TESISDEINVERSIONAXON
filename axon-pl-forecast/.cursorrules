@@ -1,0 +1,14 @@
+# AXON · P&L Forecast — reglas del proyecto
+
+Marca (obligatorio):
+- Marca AXON B2B. Footer único: "Powered by AXON B2B". Nunca Profit120, Profit Solutions ni Profit Group.
+- Modo claro siempre. Modo oscuro prohibido.
+- Paleta: amarillo #F8C908, casi negro #101113, blanco cálido #F4F3EE. Tipografía Inter.
+- Tokens en el objeto `C` de src/App.tsx; no hardcodear colores nuevos fuera de ahí.
+
+Arquitectura:
+- src/lib/engine.ts = motor de cálculo puro (sin React). Réplica 1:1 del Excel. Cualquier cambio de lógica va aquí.
+- src/data/model.json = supuestos por defecto extraídos del Excel (scripts/extract_from_excel.py).
+- src/App.tsx = UI. Un módulo por pestaña del Excel: Resumen, P&L, Gastos, Crédito bancario, Valuación.
+- Después de tocar engine.ts corre `npm test` (valida contra src/lib/__tests__/expected.json).
+- Idioma de la interfaz: español (México). Moneda MXN.
