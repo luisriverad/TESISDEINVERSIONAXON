@@ -45,6 +45,9 @@ function systemPrompt(): string {
 type Msg = { role: 'user' | 'assistant'; content: string };
 
 function readBody(req: IncomingMessage): Promise<string> {
+  // En Vercel el cuerpo puede llegar ya leído en req.body
+  const pre = (req as IncomingMessage & { body?: unknown }).body;
+  if (pre !== undefined) return Promise.resolve(typeof pre === 'string' ? pre : Buffer.isBuffer(pre) ? pre.toString('utf8') : JSON.stringify(pre));
   return new Promise((ok, fail) => { let b = ''; req.on('data', c => { b += c; }); req.on('end', () => ok(b)); req.on('error', fail); });
 }
 

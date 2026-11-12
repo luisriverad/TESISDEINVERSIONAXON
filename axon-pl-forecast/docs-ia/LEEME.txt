@@ -1,2 +1,2 @@
-Pon aquí los PDFs que la IA debe leer (máx. ~32 MB en total).
-No se suben a GitHub.
+Pon aquí los PDFs que la IA debe leer (máx. ~30 MB en total).
+PROMPT.md contiene las instrucciones de la IA.

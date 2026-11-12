@@ -1131,7 +1131,7 @@ function AIChat({ open, onClose, context }: { open: boolean; onClose: () => void
     const put = (f: (prev: string) => string) => setMsgs(m => { const n = [...m]; const last = n[n.length - 1]; n[n.length - 1] = { ...last, text: f(last.text) }; return n; });
     try {
       const res = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ context, messages: history.filter(m => m.text).map(m => ({ role: m.role, content: m.text })) }) });
-      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok || !res.body) throw new Error(res.status === 404 ? 'no se encontró /api/chat' : `error ${res.status}${res.status === 504 ? ': se agotó el tiempo' : ''}`);
       const reader = res.body.getReader(), dec = new TextDecoder(); let buf = '';
       for (;;) {
         const { value, done } = await reader.read(); if (done) break;
@@ -1146,7 +1146,7 @@ function AIChat({ open, onClose, context }: { open: boolean; onClose: () => void
         }
       }
     } catch (e) {
-      put(p => (p ? p + '\n\n' : '') + '⚠️ No se pudo conectar con el servidor de la IA. ¿Está corriendo `npm run dev`?');
+      put(p => (p ? p + '\n\n' : '') + `⚠️ No se pudo conectar con el servidor de la IA (${(e as Error).message}).`);
     }
     setBusy(false); setStatus('');
   };
