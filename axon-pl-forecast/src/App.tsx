@@ -2,6 +2,7 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 're
 import { compute, type Model, type Result, type MCell, type GCell, type Series, type PLKey } from './lib/engine';
 import DATA from './data/model.json';
 import LOGO from './assets/axon-logo.png';
+import MARK from './assets/axon-mark.png';
 import AMERICAS from './data/americas.json';
 import { geoArea, geoAzimuthalEqualArea, geoPath } from 'd3-geo';
 
@@ -1126,7 +1127,7 @@ function AIChat({ open, onClose, context }: { open: boolean; onClose: () => void
   const send = async (text: string) => {
     const t = text.trim(); if (!t || busy) return;
     const history: ChatMsg[] = [...msgs, { role: 'user', text: t }];
-    setMsgs([...history, { role: 'assistant', text: '' }]); setDraft(''); setBusy(true); setStatus('Analizando el modelo…');
+    setMsgs([...history, { role: 'assistant', text: '' }]); setDraft(''); setBusy(true); setStatus('Analizando con IA Avanzada… puede tardar unos momentos');
     const put = (f: (prev: string) => string) => setMsgs(m => { const n = [...m]; const last = n[n.length - 1]; n[n.length - 1] = { ...last, text: f(last.text) }; return n; });
     try {
       const res = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ context, messages: history.filter(m => m.text).map(m => ({ role: m.role, content: m.text })) }) });
@@ -1155,7 +1156,7 @@ function AIChat({ open, onClose, context }: { open: boolean; onClose: () => void
       <aside aria-hidden={!open} style={{ position: 'fixed', top: 0, right: 0, bottom: 0, width: 'min(460px, 100vw)', background: C.surface, borderLeft: `1px solid ${C.line}`, boxShadow: '-24px 0 60px rgba(16,17,19,.12)', transform: open ? 'none' : 'translateX(104%)', transition: 'transform .32s cubic-bezier(.2,.8,.2,1)', zIndex: 41, display: 'flex', flexDirection: 'column' }}>
         {/* encabezado */}
         <header style={{ padding: '20px 22px 16px', borderBottom: `1px solid ${C.line2}`, display: 'flex', alignItems: 'flex-start', gap: 12 }}>
-          <span style={{ width: 36, height: 36, borderRadius: 12, background: C.ink, display: 'grid', placeItems: 'center', flex: 'none' }}><Spark size={18} /></span>
+          <span style={{ width: 38, height: 38, borderRadius: 12, background: C.yellow, display: 'grid', placeItems: 'center', flex: 'none', overflow: 'hidden' }}><img src={MARK} alt="AXON" style={{ width: 30, height: 30, mixBlendMode: 'multiply' }} /></span>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ font: `650 10px ${FONT}`, color: C.gold, textTransform: 'uppercase', letterSpacing: '.16em' }}>Asesor IA</div>
             <div style={{ font: `250 19px/1.25 ${FONT}`, color: C.ink, marginTop: 3 }}>Axon Intelligence</div>
@@ -1172,6 +1173,10 @@ function AIChat({ open, onClose, context }: { open: boolean; onClose: () => void
             <div>
               <div style={{ font: `200 30px/1.15 ${FONT}`, letterSpacing: '-0.03em', color: C.ink }}>¿Qué dudas tienes?</div>
               <div style={{ font: `300 13px/1.55 ${FONT}`, color: C.muted, marginTop: 10, maxWidth: 360 }}>Pregunta sobre el P&L, los supuestos, la valuación, el mercado o las perspectivas del negocio. Las respuestas se basan en las cifras actuales del modelo.</div>
+              <div style={{ display: 'flex', gap: 8, marginTop: 14, padding: '10px 12px', borderRadius: 12, background: C.tint, border: `1px solid ${C.line2}`, font: `300 11.5px/1.5 ${FONT}`, color: C.muted, maxWidth: 380 }}>
+                <span style={{ width: 5, height: 5, borderRadius: 99, background: C.yellow, flex: 'none', marginTop: 6 }} />
+                <span>Las respuestas pueden tardar unos momentos: se utiliza <strong style={{ fontWeight: 600, color: C.ink2 }}>IA Avanzada</strong> que reúne varias plataformas y modelos de IA para analizar a fondo cada pregunta.</span>
+              </div>
               <div style={{ font: `650 10px ${FONT}`, color: C.ink, textTransform: 'uppercase', letterSpacing: '.16em', margin: '28px 0 10px' }}>Sugerencias</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {AI_SUGGEST.map(s => (
@@ -1191,13 +1196,13 @@ function AIChat({ open, onClose, context }: { open: boolean; onClose: () => void
                 <div key={i} style={{ alignSelf: 'flex-end', maxWidth: '84%', background: C.ink, color: '#fff', borderRadius: '16px 16px 4px 16px', padding: '10px 14px', font: `300 13px/1.5 ${FONT}` }}>{m.text}</div>
               ) : (
                 <div key={i} style={{ display: 'flex', gap: 10, maxWidth: '94%' }}>
-                  <span style={{ width: 24, height: 24, borderRadius: 8, background: C.yellowSoft, display: 'grid', placeItems: 'center', flex: 'none', marginTop: 1 }}><Spark size={12} color={C.gold} /></span>
+                  <span style={{ width: 24, height: 24, borderRadius: 8, background: C.yellowSoft, display: 'grid', placeItems: 'center', flex: 'none', marginTop: 1 }}><img src={MARK} alt="" style={{ width: 18, height: 18, mixBlendMode: 'multiply' }} /></span>
                   <div style={{ font: `300 13px/1.6 ${FONT}`, color: C.ink2, minWidth: 0 }}>{m.text ? <Md text={m.text} /> : null}</div>
                 </div>
               ))}
               {busy && (status || !msgs[msgs.length - 1]?.text) && (
                 <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-                  <span style={{ width: 24, height: 24, borderRadius: 8, background: C.yellowSoft, display: 'grid', placeItems: 'center' }}><Spark size={12} color={C.gold} /></span>
+                  <span style={{ width: 24, height: 24, borderRadius: 8, background: C.yellowSoft, display: 'grid', placeItems: 'center' }}><img src={MARK} alt="" style={{ width: 18, height: 18, mixBlendMode: 'multiply' }} /></span>
                   <span style={{ display: 'flex', gap: 4 }}>{[0, 1, 2].map(k => <span key={k} style={{ width: 5, height: 5, borderRadius: 99, background: C.gold, animation: `axonDot 1s ${k * .15}s infinite ease-in-out` }} />)}</span>
                   {status && <span style={{ font: `300 11.5px ${FONT}`, color: C.faint, fontStyle: 'italic' }}>{status}</span>}
                 </div>
