@@ -1023,6 +1023,209 @@ function Mercado() {
   );
 }
 
+// ===================== Asesor IA (diseño; la conexión al API va después) =====================
+type ChatMsg = { role: 'user' | 'assistant'; text: string };
+const AI_SUGGEST = [
+  { k: 'Valuación', q: '¿Qué supuestos mueven más la valuación?' },
+  { k: 'Meta', q: '¿Qué tendría que pasar para llegar a $30M de valuación?' },
+  { k: 'Mercado', q: 'Después de México, ¿qué mercado conviene atacar primero?' },
+  { k: 'Riesgos', q: 'Resume los principales riesgos del plan a 5 años.' },
+];
+function Spark({ size = 14, color = C.yellow }: { size?: number; color?: string }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden style={{ flex: 'none' }}>
+      <path d="M12 2.5c.5 4.6 2.4 6.5 7 7-4.6.5-6.5 2.4-7 7-.5-4.6-2.4-6.5-7-7 4.6-.5 6.5-2.4 7-7Z" fill={color} />
+      <path d="M19 14.5c.25 2.1 1.15 3 3.25 3.25-2.1.25-3 1.15-3.25 3.25-.25-2.1-1.15-3-3.25-3.25 2.1-.25 3-1.15 3.25-3.25Z" fill={color} opacity={.7} />
+    </svg>
+  );
+}
+function AIButton({ onClick }: { onClick: () => void }) {
+  const [h, setH] = useState(false);
+  return (
+    <button onClick={onClick} onMouseEnter={() => setH(true)} onMouseLeave={() => setH(false)}
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 10, border: `1px solid ${C.ink}`, background: h ? '#000' : C.ink, color: '#fff', borderRadius: 16, padding: '9px 20px', cursor: 'pointer', textAlign: 'left', font: `600 10.5px ${FONT}`, letterSpacing: '.14em', textTransform: 'uppercase', boxShadow: h ? '0 6px 20px rgba(16,17,19,.18)' : '0 1px 2px rgba(16,17,19,.12)', transition: 'all .2s' }}>
+      <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 3, lineHeight: 1.2 }}>
+        <span>Dejemos que la <span style={{ color: C.yellow }}>IA avanzada</span> nos ayude a decidir</span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, font: `400 9px ${FONT}`, letterSpacing: '.18em', color: 'rgba(255,255,255,.62)' }}>
+          Da click aquí <span style={{ color: C.yellow, transform: h ? 'translateX(3px)' : 'none', transition: 'transform .2s' }}>→</span>
+        </span>
+      </span>
+    </button>
+  );
+}
+// Resumen de las cifras vivas del modelo que recibe la IA
+function aiContext(M: Model, R: Result): string {
+  const r = (v: number) => Math.round(v), r4 = (v: number) => Math.round(v * 1e4) / 1e4;
+  const arr = (a: number[]) => a.map(r);
+  const A = R.annual, V = R.v;
+  const pl = Object.fromEntries((['venta', 'dev', 'mant', 'otros', 'costos', 'ub', 'go', 'ga', 'mkt', 'gasto', 'uo', 'da', 'uai', 'isr', 'un', 'empresas'] as const).map(k => [k, arr(A[k])]));
+  return JSON.stringify({
+    moneda: 'MXN nominales', anios: YEARS_S, escenario: R.scen.label,
+    nota_anio1: 'Año 1 (2026) incluye meses de presupuesto nov-2025 a dic-2026',
+    pl_anual: { ...pl, resultado_acumulado: arr(R.acumY) },
+    glosario_pl: { dev: 'ingreso por desarrollo inicial', mant: 'ingreso por mantenimiento', otros: 'otros ingresos', ub: 'utilidad bruta', go: 'gasto de operación', ga: 'gasto de administración', mkt: 'marketing', uo: 'utilidad de operación (EBITDA)', da: 'depreciación y amortización', uai: 'utilidad antes de impuestos', un: 'utilidad neta', empresas: 'número de empresas cliente' },
+    supuestos: M.params,
+    clientes: M.clients.map(c => c.name),
+    gastos: { opex_total: arr(R.gastos.opexTot), admin_total: arr(R.gastos.adminTot), plantilla_total: R.gastos.hcTot, marketing_total: arr(R.gastos.mktTot), puestos: M.admin.map((a, i) => ({ puesto: a.name, sueldo_mensual: a.sal, plantilla: a.hc, costo: arr(R.gastos.admin[i]) })) },
+    credito: { ...M.credito, pagos_anuales: R.cred.years.map(y => ({ pago: r(y.pago), interes: r(y.interes), capital: r(y.capital) })) },
+    escenario_meta: { crecimiento_volumen: R.scen.vol.map(r4), aumento_precio: R.scen.precio.map(r4) },
+    valuacion: {
+      supuestos: M.val, wacc: r4(V.wacc), ke: r4(V.ke), kd_despues_impuestos: r4(V.kdAt), beta_apalancada: r4(V.betaL), d_e: r4(V.de),
+      ventas: arr(V.ventas), ebitda: arr(V.ebitda), nopat: arr(V.nopat), capex: arr(V.capexA), capital_trabajo: arr(V.ctA), flujo_libre: arr(V.fcff), valor_presente_flujos: arr(V.pv),
+      valor_terminal: r(V.tv), vp_valor_terminal: r(V.pvTv), peso_valor_terminal: r4(V.pctTv), valor_empresa_EV: r(V.ev), deuda: r(V.deuda), caja: r(V.caja), valor_capital: r(V.equity),
+      ev_ventas: r4(V.evVentas), ev_ebitda: r4(V.evEbitda), meta_valuacion: M.val.meta, cumple_meta: V.cumple,
+      sensibilidad_wacc_vs_g: { wacc: V.sensA.rows, g: V.sensA.cols, valor_capital: V.sensA.m.map(arr) },
+      sensibilidad_prima_startup_vs_g: { prima: V.sensB.rows, g: V.sensB.cols, valor_capital: V.sensB.m.map(arr) },
+    },
+    mercado: { definicion: 'Empresas con ventas anuales mayores a US$5M', mercados: MARKETS.map(m => ({ mercado: m.name, nota: m.note, minimo: m.lo, maximo: m.hi, fuente: m.src })) },
+  });
+}
+
+// Markdown mínimo para las respuestas: títulos, listas, tablas, negritas
+function inlineMd(t: string): React.ReactNode[] {
+  return t.split(/(\*\*[^*]+\*\*)/g).map((p, i) => p.startsWith('**') && p.endsWith('**') ? <strong key={i} style={{ fontWeight: 600, color: C.ink }}>{p.slice(2, -2)}</strong> : p);
+}
+function Md({ text }: { text: string }) {
+  const lines = text.split('\n'); const out: React.ReactNode[] = []; let i = 0;
+  while (i < lines.length) {
+    const l = lines[i];
+    if (/^\s*\|/.test(l)) {
+      const rows: string[][] = [];
+      while (i < lines.length && /^\s*\|/.test(lines[i])) { if (!/^\s*\|[\s:|-]+\|\s*$/.test(lines[i])) rows.push(lines[i].trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim())); i++; }
+      out.push(<div key={i} style={{ overflowX: 'auto', margin: '6px 0' }}><table style={{ borderCollapse: 'collapse', font: `300 12px ${FONT}`, width: '100%' }}><tbody>{rows.map((r, j) => <tr key={j}>{r.map((c, k) => { const T = j === 0 ? 'th' : 'td'; return <T key={k} style={{ textAlign: k ? 'right' : 'left', padding: '5px 8px', borderBottom: `1px solid ${j === 0 ? C.line : C.line2}`, fontWeight: j === 0 ? 600 : 300, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>{inlineMd(c)}</T>; })}</tr>)}</tbody></table></div>);
+      continue;
+    }
+    if (/^\s*([-*•]|\d+\.)\s+/.test(l)) {
+      const ordered = /^\s*\d+\./.test(l); const items: string[] = [];
+      while (i < lines.length && /^\s*([-*•]|\d+\.)\s+/.test(lines[i])) { items.push(lines[i].replace(/^\s*([-*•]|\d+\.)\s+/, '')); i++; }
+      const L = ordered ? 'ol' : 'ul';
+      out.push(<L key={i} style={{ margin: '4px 0 8px', paddingLeft: 18 }}>{items.map((it, j) => <li key={j} style={{ margin: '3px 0' }}>{inlineMd(it)}</li>)}</L>);
+      continue;
+    }
+    const h = l.match(/^#{1,4}\s+(.*)/);
+    if (h) out.push(<div key={i} style={{ font: `600 12.5px ${FONT}`, color: C.ink, margin: '12px 0 4px' }}>{inlineMd(h[1])}</div>);
+    else if (/^\s*---+\s*$/.test(l)) out.push(<hr key={i} style={{ border: 0, borderTop: `1px solid ${C.line2}`, margin: '10px 0' }} />);
+    else if (l.trim()) out.push(<p key={i} style={{ margin: '0 0 8px' }}>{inlineMd(l)}</p>);
+    i++;
+  }
+  return <>{out}</>;
+}
+
+function AIChat({ open, onClose, context }: { open: boolean; onClose: () => void; context: string }) {
+  const [msgs, setMsgs] = useState<ChatMsg[]>([]);
+  const [draft, setDraft] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState('');
+  const endRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [msgs, busy]);
+  useEffect(() => {
+    if (!open) return;
+    const on = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', on); return () => window.removeEventListener('keydown', on);
+  }, [open, onClose]);
+  const send = async (text: string) => {
+    const t = text.trim(); if (!t || busy) return;
+    const history: ChatMsg[] = [...msgs, { role: 'user', text: t }];
+    setMsgs([...history, { role: 'assistant', text: '' }]); setDraft(''); setBusy(true); setStatus('Analizando el modelo…');
+    const put = (f: (prev: string) => string) => setMsgs(m => { const n = [...m]; const last = n[n.length - 1]; n[n.length - 1] = { ...last, text: f(last.text) }; return n; });
+    try {
+      const res = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ context, messages: history.filter(m => m.text).map(m => ({ role: m.role, content: m.text })) }) });
+      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+      const reader = res.body.getReader(), dec = new TextDecoder(); let buf = '';
+      for (;;) {
+        const { value, done } = await reader.read(); if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const lines = buf.split('\n'); buf = lines.pop() ?? '';
+        for (const ln of lines) {
+          if (!ln.trim()) continue;
+          const ev = JSON.parse(ln) as { t: 'text' | 'status' | 'error' | 'done'; v?: string };
+          if (ev.t === 'text') { setStatus(''); put(p => p + ev.v); }
+          else if (ev.t === 'status') setStatus(ev.v ?? '');
+          else if (ev.t === 'error') put(p => (p ? p + '\n\n' : '') + '⚠️ ' + ev.v);
+        }
+      }
+    } catch (e) {
+      put(p => (p ? p + '\n\n' : '') + '⚠️ No se pudo conectar con el servidor de la IA. ¿Está corriendo `npm run dev`?');
+    }
+    setBusy(false); setStatus('');
+  };
+  return (
+    <>
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(16,17,19,.18)', backdropFilter: 'blur(2px)', opacity: open ? 1 : 0, pointerEvents: open ? 'auto' : 'none', transition: 'opacity .25s', zIndex: 40 }} />
+      <aside aria-hidden={!open} style={{ position: 'fixed', top: 0, right: 0, bottom: 0, width: 'min(460px, 100vw)', background: C.surface, borderLeft: `1px solid ${C.line}`, boxShadow: '-24px 0 60px rgba(16,17,19,.12)', transform: open ? 'none' : 'translateX(104%)', transition: 'transform .32s cubic-bezier(.2,.8,.2,1)', zIndex: 41, display: 'flex', flexDirection: 'column' }}>
+        {/* encabezado */}
+        <header style={{ padding: '20px 22px 16px', borderBottom: `1px solid ${C.line2}`, display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+          <span style={{ width: 36, height: 36, borderRadius: 12, background: C.ink, display: 'grid', placeItems: 'center', flex: 'none' }}><Spark size={18} /></span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ font: `650 10px ${FONT}`, color: C.gold, textTransform: 'uppercase', letterSpacing: '.16em' }}>Asesor IA</div>
+            <div style={{ font: `250 19px/1.25 ${FONT}`, color: C.ink, marginTop: 3 }}>Axon Intelligence</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, font: `300 11px ${FONT}`, color: C.faint, marginTop: 4 }}>
+              <span style={{ width: 6, height: 6, borderRadius: 99, background: C.line }} />Conoce el modelo, el mercado y la valuación
+            </div>
+          </div>
+          <button onClick={onClose} aria-label="Cerrar" style={{ border: 0, background: 'transparent', cursor: 'pointer', width: 30, height: 30, borderRadius: 99, color: C.muted, font: `200 22px/1 ${FONT}` }}>×</button>
+        </header>
+
+        {/* conversación */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '22px 22px 8px' }}>
+          {msgs.length === 0 ? (
+            <div>
+              <div style={{ font: `200 30px/1.15 ${FONT}`, letterSpacing: '-0.03em', color: C.ink }}>¿Qué dudas tienes?</div>
+              <div style={{ font: `300 13px/1.55 ${FONT}`, color: C.muted, marginTop: 10, maxWidth: 360 }}>Pregunta sobre el P&L, los supuestos, la valuación, el mercado o las perspectivas del negocio. Las respuestas se basan en las cifras actuales del modelo.</div>
+              <div style={{ font: `650 10px ${FONT}`, color: C.ink, textTransform: 'uppercase', letterSpacing: '.16em', margin: '28px 0 10px' }}>Sugerencias</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {AI_SUGGEST.map(s => (
+                  <button key={s.q} onClick={() => send(s.q)}
+                    style={{ textAlign: 'left', border: `1px solid ${C.line}`, background: C.tint, borderRadius: 14, padding: '12px 14px', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 4 }}
+                    onMouseEnter={e => { e.currentTarget.style.borderColor = C.yellowLine; e.currentTarget.style.background = C.yellowSoft; }}
+                    onMouseLeave={e => { e.currentTarget.style.borderColor = C.line; e.currentTarget.style.background = C.tint; }}>
+                    <span style={{ font: `600 9.5px ${FONT}`, color: C.gold, textTransform: 'uppercase', letterSpacing: '.14em' }}>{s.k}</span>
+                    <span style={{ font: `300 13px/1.4 ${FONT}`, color: C.ink }}>{s.q}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+              {msgs.filter(m => m.role === 'user' || m.text).map((m, i) => m.role === 'user' ? (
+                <div key={i} style={{ alignSelf: 'flex-end', maxWidth: '84%', background: C.ink, color: '#fff', borderRadius: '16px 16px 4px 16px', padding: '10px 14px', font: `300 13px/1.5 ${FONT}` }}>{m.text}</div>
+              ) : (
+                <div key={i} style={{ display: 'flex', gap: 10, maxWidth: '94%' }}>
+                  <span style={{ width: 24, height: 24, borderRadius: 8, background: C.yellowSoft, display: 'grid', placeItems: 'center', flex: 'none', marginTop: 1 }}><Spark size={12} color={C.gold} /></span>
+                  <div style={{ font: `300 13px/1.6 ${FONT}`, color: C.ink2, minWidth: 0 }}>{m.text ? <Md text={m.text} /> : null}</div>
+                </div>
+              ))}
+              {busy && (status || !msgs[msgs.length - 1]?.text) && (
+                <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                  <span style={{ width: 24, height: 24, borderRadius: 8, background: C.yellowSoft, display: 'grid', placeItems: 'center' }}><Spark size={12} color={C.gold} /></span>
+                  <span style={{ display: 'flex', gap: 4 }}>{[0, 1, 2].map(k => <span key={k} style={{ width: 5, height: 5, borderRadius: 99, background: C.gold, animation: `axonDot 1s ${k * .15}s infinite ease-in-out` }} />)}</span>
+                  {status && <span style={{ font: `300 11.5px ${FONT}`, color: C.faint, fontStyle: 'italic' }}>{status}</span>}
+                </div>
+              )}
+            </div>
+          )}
+          <div ref={endRef} />
+        </div>
+
+        {/* entrada */}
+        <div style={{ padding: '12px 18px 16px', borderTop: `1px solid ${C.line2}` }}>
+          {msgs.length > 0 && <button onClick={() => setMsgs([])} style={{ border: 0, background: 'transparent', padding: '0 4px 8px', cursor: 'pointer', font: `300 11px ${FONT}`, color: C.faint, textDecoration: 'underline', textDecorationColor: C.line, textUnderlineOffset: 3 }}>Nueva conversación</button>}
+          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, border: `1px solid ${C.line}`, borderRadius: 16, padding: '8px 8px 8px 14px', background: C.surface }}>
+            <textarea value={draft} onChange={e => setDraft(e.target.value)} rows={1} placeholder="Escribe tu pregunta…"
+              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(draft); } }}
+              style={{ flex: 1, border: 0, outline: 'none', resize: 'none', font: `300 13.5px/1.5 ${FONT}`, color: C.ink, background: 'transparent', padding: '5px 0', maxHeight: 120 }} />
+            <button onClick={() => send(draft)} disabled={!draft.trim() || busy} aria-label="Enviar"
+              style={{ width: 34, height: 34, borderRadius: 11, border: 0, cursor: draft.trim() ? 'pointer' : 'default', background: draft.trim() ? C.yellow : C.tint2, color: draft.trim() ? C.ink : C.faint, display: 'grid', placeItems: 'center', transition: 'background .15s', flex: 'none' }}>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 19V5M5 12l7-7 7 7" /></svg>
+            </button>
+          </div>
+          <div style={{ font: `300 9.5px ${FONT}`, color: C.faint, marginTop: 8, textAlign: 'center' }}>La IA puede equivocarse. Verifica las cifras antes de tomar decisiones.</div>
+        </div>
+      </aside>
+    </>
+  );
+}
+
 // ===================== Plataforma =====================
 const MODULES = [
   { id: 'resumen', l: 'Resumen' }, { id: 'pl', l: 'P&L' }, { id: 'gastos', l: 'Gastos' }, { id: 'credito', l: 'Crédito bancario' }, { id: 'valuacion', l: 'Valuación' }, { id: 'mercado', l: 'Mercado' },
@@ -1083,6 +1286,8 @@ export default function AxonPLForecast() {
   const set = (f: (m: Model) => void) => setM(prev => { const n = clone(prev); f(n); return n; });
   const dirty = useMemo(() => JSON.stringify(M) !== JSON.stringify(DEFAULT), [M]);
   const [confirmReset, setConfirmReset] = useState(false);
+  const [aiOpen, setAiOpen] = useState(false);
+  const aiCtx = useMemo(() => aiContext(M, R), [M, R]);
 
   return (
     <div style={{ minHeight: '100vh', background: C.bg, font: `400 14px ${FONT}`, color: C.ink, display: 'flex', flexDirection: 'column' }}>
@@ -1091,6 +1296,7 @@ export default function AxonPLForecast() {
         section table tr > *:last-child { padding-right: 24px !important; }
         input:focus { border-color: ${C.ink} !important; box-shadow: 0 0 0 3px ${C.yellowSoft}; }
         button:focus-visible { outline: 2px solid ${C.ink}; outline-offset: 2px; }
+        @keyframes axonDot { 0%, 80%, 100% { opacity: .25; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-3px); } }
         @media (max-width: 760px) { .axon-two { grid-template-columns: 1fr !important; } .axon-hide-sm { display: none !important; } }
       `}</style>
       <header style={{ background: C.surface, borderBottom: `1px solid ${C.line}`, position: 'sticky', top: 0, zIndex: 20 }}>
@@ -1104,10 +1310,11 @@ export default function AxonPLForecast() {
             </div>
             <span style={{ font: `650 10.5px ${FONT}`, letterSpacing: '.1em', padding: '4px 9px', borderRadius: 999, border: `1px solid ${C.ink}`, color: C.ink }}>CONFIDENCIAL</span>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 18, flexWrap: 'wrap' }}>
             {dirty && (confirmReset
               ? <span style={{ display: 'flex', gap: 6 }}><button style={{ ...btn, background: C.ink, color: '#fff', borderColor: C.ink }} onClick={() => { setM(clone(DEFAULT)); setConfirmReset(false); }}>Confirmar</button><button style={btn} onClick={() => setConfirmReset(false)}>Cancelar</button></span>
               : <button style={{ border: 0, background: 'transparent', padding: '4px 2px', cursor: 'pointer', font: `300 11.5px ${FONT}`, color: C.faint, textDecoration: 'underline', textDecorationColor: C.line, textUnderlineOffset: 3 }} onClick={() => setConfirmReset(true)}>Restablecer supuestos</button>)}
+            <AIButton onClick={() => setAiOpen(true)} />
           </div>
         </div>
         <nav style={{ maxWidth: 1440, margin: '0 auto', padding: '0 20px', display: 'flex', gap: 4, overflowX: 'auto', marginTop: 10 }}>
@@ -1131,6 +1338,8 @@ export default function AxonPLForecast() {
         {mod === 'valuacion' && <Valuacion M={M} R={R} set={set} />}
         {mod === 'mercado' && <Mercado />}
       </main>
+
+      <AIChat open={aiOpen} onClose={() => setAiOpen(false)} context={aiCtx} />
 
       <footer style={{ borderTop: `1px solid ${C.line}`, background: C.surface }}>
         <div style={{ maxWidth: 1440, margin: '0 auto', padding: '14px 28px', display: 'flex', justifyContent: 'center', font: `500 12px ${FONT}`, color: C.muted, letterSpacing: '.04em' }}>

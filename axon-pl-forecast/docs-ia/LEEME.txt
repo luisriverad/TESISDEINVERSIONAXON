@@ -1,0 +1,2 @@
+Pon aquí los PDFs que la IA debe leer (máx. ~32 MB en total).
+No se suben a GitHub.
