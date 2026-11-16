@@ -62,10 +62,16 @@ export function chatHandler(getKey: () => string | undefined) {
     res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-cache' });
 
     const apiKey = getKey();
-    if (!apiKey) { send({ t: 'error', v: 'Falta la API key. Agrega ANTHROPIC_API_KEY en el archivo .env.local y reinicia el servidor.' }); return res.end(); }
+    if (!apiKey) { send({ t: 'error', v: 'Falta la API key. Configura ANTHROPIC_API_KEY (en .env.local o en las variables de entorno de Vercel).' }); return res.end(); }
 
     try {
-      const { messages, context } = JSON.parse(await readBody(req)) as { messages: Msg[]; context: string };
+      const body = JSON.parse(await readBody(req)) as { messages: Msg[]; context: string };
+      // Validación básica: solo turnos user/assistant de texto, con tamaño acotado
+      const messages = (Array.isArray(body.messages) ? body.messages : [])
+        .filter(m => (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim())
+        .map(m => ({ role: m.role, content: m.content.slice(0, 8000) }));
+      const context = typeof body.context === 'string' ? body.context.slice(0, 200000) : '{}';
+      if (!messages.length || messages[messages.length - 1].role !== 'user') { send({ t: 'error', v: 'Mensaje vacío.' }); return res.end(); }
       const client = new Anthropic({ apiKey });
       // Primer turno: documentos (estables, en caché) y después las cifras vivas del modelo
       const docs = loadDocs();
@@ -90,19 +96,22 @@ export function chatHandler(getKey: () => string | undefined) {
           tools: [{ type: 'web_search_20260209', name: 'web_search', max_uses: 5 }],
           messages: convo,
         });
+        const abort = () => stream.abort(); req.on('close', abort);
         for await (const ev of stream) {
           if (ev.type === 'content_block_start' && ev.content_block.type === 'server_tool_use') send({ t: 'status', v: 'Buscando en la web…' });
           else if (ev.type === 'content_block_start' && ev.content_block.type === 'text') send({ t: 'status', v: '' });
           else if (ev.type === 'content_block_delta' && ev.delta.type === 'text_delta') send({ t: 'text', v: ev.delta.text });
         }
         const final = await stream.finalMessage();
+        req.off('close', abort);
         if (final.stop_reason === 'refusal') { send({ t: 'error', v: 'La IA no pudo responder esta pregunta. Intenta formularla de otra manera.' }); break; }
         if (final.stop_reason !== 'pause_turn') break;
+        if (round === 3) send({ t: 'error', v: 'La respuesta quedó incompleta; intenta una pregunta más específica.' });
         convo.push({ role: 'assistant', content: final.content });
       }
       send({ t: 'done' });
     } catch (e) {
-      const msg = e instanceof Anthropic.AuthenticationError ? 'La API key no es válida. Revisa el valor en .env.local.'
+      const msg = e instanceof Anthropic.AuthenticationError ? 'La API key no es válida. Revisa ANTHROPIC_API_KEY (.env.local o variables de entorno de Vercel).'
         : e instanceof Anthropic.RateLimitError ? 'Se alcanzó el límite de uso de la API. Intenta en unos minutos.'
         : e instanceof Anthropic.APIError ? `Error de la API (${e.status}): ${e.message}`
         : `No se pudo conectar con la IA: ${(e as Error).message}`;
