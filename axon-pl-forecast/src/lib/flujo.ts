@@ -37,7 +37,10 @@ const zeros = () => Array(N_MESES).fill(0) as number[];
 const shift = (s: number[], lag: number, share = 1) => { const o = zeros(); s.forEach((v, t) => { if (t + lag < N_MESES && t + lag >= 0) o[t + lag] += v * share; }); return o; };
 const add = (...xs: number[][]) => xs[0].map((_, t) => xs.reduce((a, s) => a + s[t], 0));
 const sub = (a: number[], b: number[]) => a.map((v, t) => v - b[t]);
-const cobro = (s: number[], credito: number, Ldso: number) => add(shift(s, 0, 1 - credito), shift(s, Ldso, credito));
+/** Desplaza una serie un número de meses NO entero (días ÷ 30.5): reparte entre el mes anterior y el siguiente */
+const shiftF = (s: number[], m: number, share = 1) => { const a = Math.floor(m), w = m - a; return w < 1e-9 ? shift(s, a, share) : add(shift(s, a, share * (1 - w)), shift(s, a + 1, share * w)); };
+/** Cobro con días de cartera exactos: la parte a crédito se cobra a DSO días (meses fraccionarios) */
+const cobro = (s: number[], credito: number, LdsoF: number) => add(shift(s, 0, 1 - credito), shiftF(s, LdsoF, credito));
 const median = (a: number[], d: number) => { if (!a.length) return d; const b = [...a].sort((x, y) => x - y); return b[Math.floor(b.length / 2)]; };
 const firstIdx = (a: number[]) => a.findIndex(v => Math.abs(v) > 1.5);
 /** Nunca se cobra antes de registrar: si el cobro acumulado rebasa lo devengado, el excedente pasa al mes siguiente */
@@ -79,22 +82,39 @@ export function cicloConDso<T extends { etapa: string; dias: number }>(ciclo: T[
   return ciclo.map(e => (/^PAGO/i.test(e.etapa.trim()) ? { ...e, dias: Math.max(0, Math.round(dso)) } : e));
 }
 
+/** Tramos del ciclo comercial. Las etapas de PAGO corren EN PARALELO: arrancan cuando se factura (fin de la etapa
+ *  anterior) y duran el DSO, sin retrasar el proceso de desarrollo, que sigue con la siguiente etapa. */
+export function hitosCiclo<T extends { etapa: string; dias: number }>(ciclo: T[], dso: number) {
+  const et = cicloConDso(ciclo, dso);
+  let t = 0;
+  const tramos = et.map(e => {
+    const pago = /^PAGO/i.test(e.etapa.trim());
+    const ini = t, fin = t + e.dias;
+    if (!pago) t = fin;
+    return { ...e, ini, fin, pago };
+  });
+  const totalProceso = t;                                             // fin del proceso (go-live)
+  const finPagos = tramos.filter(x => x.pago).map(x => x.fin);
+  const diaPago1 = finPagos.length ? finPagos[0] : totalProceso;
+  const diaFiniquito = finPagos.length ? Math.max(...finPagos) : totalProceso;
+  const iFirma = tramos.findIndex(x => !x.pago && /CIERRE|FIRMA/i.test(x.etapa));
+  const diaFirma = iFirma >= 0 ? tramos[iFirma].fin : 0;
+  return { tramos, totalProceso, diaPago1, diaFiniquito, diaFirma, horizonte: Math.max(totalProceso, diaFiniquito) };
+}
+
 export function computeFlujo(M: Model, R: Result): Flujo {
   // ---------- Hitos del ciclo comercial, contados desde la firma ----------
-  const et = cicloConDso(M.ciclo ?? [], M.val.wc?.dso ?? 30);
-  const acc: number[] = []; et.reduce((s, e, i) => (acc[i] = s + e.dias), 0);
-  const total = acc[acc.length - 1] ?? 0;
-  const pagos = et.map((e, i) => (/^PAGO/i.test(e.etapa.trim()) ? i : -1)).filter(i => i >= 0);
-  const diaPago1 = pagos.length ? acc[pagos[0]] : total;
-  const diaFiniquito = pagos.length ? acc[pagos[pagos.length - 1]] : total;
-  const iFirma = et.findIndex(e => /CIERRE|FIRMA/i.test(e.etapa));
-  const diaFirma = iFirma >= 0 ? acc[iFirma] : 0;
   const W = M.val.wc ?? { dso: 30, credito: 1, dio: 0, dpo: 30, base: 360 };
+  const HC = hitosCiclo(M.ciclo ?? [], W.dso);
+  const { diaPago1, diaFiniquito, diaFirma } = HC, total = HC.totalProceso;
   const mes = (d: number) => Math.max(0, Math.round(d / DIAS_MES));
-  const mesMant = Math.floor(total / DIAS_MES) + 1;                    // mes del ciclo (desde el primer contacto) en que arranca el mantenimiento
+  const mesMant = Math.floor(total / DIAS_MES) + 1;                    // mes del ciclo (desde el primer contacto) en que arranca el mantenimiento: al terminar el proceso (go-live)
   const L1 = mes(diaPago1 - diaFirma), L2 = mes(diaFiniquito - diaFirma);
-  const Lmant = Math.max(L2 + 1, mesMant - mes(diaFirma));             // siempre después del finiquito
+  const Lmant = Math.max(1, mesMant - mes(diaFirma));                  // el mantenimiento no espera al cobro del finiquito
   const Ldso = mes(W.dso), Ldpo = mes(W.dpo), credito = W.credito;
+  // Para la caja se usan los días exactos (p. ej. 45 días = 1.48 meses), no meses redondeados
+  const LdsoF = Math.max(0, W.dso) / DIAS_MES, LdpoF = Math.max(0, W.dpo) / DIAS_MES;
+  const L1F = Math.max(0, diaPago1 - diaFirma) / DIAS_MES, L2F = Math.max(0, diaFiniquito - diaFirma) / DIAS_MES;
 
   // Factor de la cartera existente después de dic-27 (igual que el motor anual): el contrato es anual, así que
   // la mensualidad es fija dentro de cada año; al renovar (cada enero desde 2028) se aplican churn e inflación
@@ -137,28 +157,29 @@ export function computeFlujo(M: Model, R: Result): Flujo {
   cart.forEach(x => {
     const totDev = x.dev.slice(0, N_CARTERA).reduce((a, b) => a + b, 0), totMant = x.mant.slice(0, N_CARTERA).reduce((a, b) => a + b, 0);
     if (Math.abs(totDev) + Math.abs(totMant) < 2) return; // filas vacías o marcadores de $1
-    cobDevW = add(cobDevW, cobro(x.dev, credito, Ldso));
-    cobMantW = add(cobMantW, cobro(x.mant, credito, Ldso));
+    cobDevW = add(cobDevW, cobro(x.dev, credito, LdsoF));
+    cobMantW = add(cobMantW, cobro(x.mant, credito, LdsoF));
     const comDev = x.dev.map((v, t) => v * tasaDev(t));
-    comCobro.w = add(comCobro.w, cobro(comDev, credito, Ldso));
+    comCobro.w = add(comCobro.w, cobro(comDev, credito, LdsoF));
     const s = firstIdx(add(x.dev, x.mant));
     if (x.nuevo) {
       // Firma = primer mes en la cartera. Desarrollo: 50% al primer pago y 50% al finiquito. Mantenimiento: desde el cierre del ciclo.
-      const d0 = zeros(); if (s + L1 < N_MESES) d0[s + L1] += totDev * 0.5; if (s + L2 < N_MESES) d0[s + L2] += totDev * 0.5;
+      const firma = zeros(); firma[s] = totDev * 0.5;
+      const d0 = add(shiftF(firma, L1F), shiftF(firma, L2F)); // 50% al primer pago y 50% al finiquito, en días exactos
       const d = noAntesDe(d0, x.dev);
       const m0 = firstIdx(x.mant);
       // Sin desarrollo (solo mantenimiento) no hay maquetas ni entrega: espera solo al primer pago
-      const lag = m0 >= 0 ? Math.max(0, s + (totDev > 0.5 ? Lmant : Math.max(0, L1 - Ldso)) - m0) : 0;
+      const lag = m0 >= 0 ? Math.max(0, s + (totDev > 0.5 ? Lmant : Math.max(0, Math.round(L1F - LdsoF))) - m0) : 0;
       cobDevC = add(cobDevC, d);
       comCobro.c = add(comCobro.c, d.map(v => v * M.params.comision));
-      cobMantC = add(cobMantC, cobro(shift(x.mant, lag), credito, Ldso));
+      cobMantC = add(cobMantC, cobro(shift(x.mant, lag), credito, LdsoF));
       const devMeses = x.dev.map((v, t) => (v > 0.5 ? t : -1)).filter(t => t >= 0);
       clientes.push({ i: x.i, name: x.c.name, nuevo: true, auto: x.auto, mesPL: s, mesCaja: totDev > 0.5 ? s + L1 : m0 + lag + Ldso, dev: totDev, mant: totMant,
         finPL: devMeses.length > 1 ? devMeses[devMeses.length - 1] : -1, finCaja: totDev > 0.5 ? s + L2 : -1, mantPL: m0, mantCaja: m0 >= 0 ? m0 + lag + Ldso : -1 });
     } else {
-      cobDevC = add(cobDevC, cobro(x.dev, credito, Ldso));
-      comCobro.c = add(comCobro.c, cobro(comDev, credito, Ldso));
-      cobMantC = add(cobMantC, cobro(x.mant, credito, Ldso));
+      cobDevC = add(cobDevC, cobro(x.dev, credito, LdsoF));
+      comCobro.c = add(comCobro.c, cobro(comDev, credito, LdsoF));
+      cobMantC = add(cobMantC, cobro(x.mant, credito, LdsoF));
       const devMeses = x.dev.map((v, t) => (v > 0.5 ? t : -1)).filter(t => t >= 0), m0 = firstIdx(x.mant);
       clientes.push({ i: x.i, name: x.c.name, nuevo: false, auto: x.auto, mesPL: s, mesCaja: s + Ldso, dev: totDev, mant: totMant,
         finPL: devMeses.length > 1 ? devMeses[devMeses.length - 1] : -1, finCaja: devMeses.length > 1 ? devMeses[devMeses.length - 1] + Ldso : -1, mantPL: m0, mantCaja: m0 >= 0 ? m0 + Ldso : -1 });
@@ -172,15 +193,15 @@ export function computeFlujo(M: Model, R: Result): Flujo {
   const mantRes = mantPL.map((v, t) => (t >= N_CARTERA ? Math.max(0, v - mantCont[t]) : 0));
   // Si el P&L proyecta menos mantenimiento que la cartera continuada, la diferencia se descuenta de la cobranza existente
   const ajusteCont = mantPL.map((v, t) => (t >= N_CARTERA ? Math.min(0, v - mantCont[t]) : 0));
-  cobMantW = add(cobMantW, cobro(ajusteCont, credito, Ldso));
-  cobMantC = add(cobMantC, cobro(ajusteCont, credito, Ldso));
-  cobDevW = add(cobDevW, cobro(devAgg, credito, Ldso));
-  cobMantW = add(cobMantW, cobro(mantRes, credito, Ldso));
-  const devAggC = add(shift(devAgg, L1, 0.5), shift(devAgg, Math.max(L1, L2 - pDev2), 0.5));
+  cobMantW = add(cobMantW, cobro(ajusteCont, credito, LdsoF));
+  cobMantC = add(cobMantC, cobro(ajusteCont, credito, LdsoF));
+  cobDevW = add(cobDevW, cobro(devAgg, credito, LdsoF));
+  cobMantW = add(cobMantW, cobro(mantRes, credito, LdsoF));
+  const devAggC = add(shiftF(devAgg, L1F, 0.5), shiftF(devAgg, Math.max(L1F, L2F - pDev2), 0.5));
   cobDevC = add(cobDevC, devAggC);
-  comCobro.w = add(comCobro.w, cobro(devAgg, credito, Ldso).map(v => v * M.params.comision));
+  comCobro.w = add(comCobro.w, cobro(devAgg, credito, LdsoF).map(v => v * M.params.comision));
   comCobro.c = add(comCobro.c, devAggC.map(v => v * M.params.comision));
-  cobMantC = add(cobMantC, cobro(shift(mantRes, Math.max(0, Lmant - pMant)), credito, Ldso));
+  cobMantC = add(cobMantC, cobro(shift(mantRes, Math.max(0, Lmant - pMant)), credito, LdsoF));
 
   // ---------- Egresos ----------
   const S = (k: PLKey) => serie(R, k);
@@ -207,9 +228,9 @@ export function computeFlujo(M: Model, R: Result): Flujo {
   const egresoPL = add(S('costos'), S('gasto'), S('da'), impInt);
   const pl = vista(venta, egresoPL);
   const plb = vista(venta, add(sub(egresoPL, S('da')), capCred, capex));
-  const cobOtros = cobro(otros, credito, Ldso);
-  const wc = vista(add(cobDevW, cobMantW, cobOtros), add(nomina, shift(terceros, Ldpo), comW, impInt, capCred, capex));
-  const tercerosP = shift(terceros, Ldpo);
+  const cobOtros = cobro(otros, credito, LdsoF);
+  const wc = vista(add(cobDevW, cobMantW, cobOtros), add(nomina, shiftF(terceros, LdpoF), comW, impInt, capCred, capex));
+  const tercerosP = shiftF(terceros, LdpoF);
   const pagosC = add(nomina, tercerosP, comC, impInt);
   const cobranza = add(cobDevC, cobMantC, cobOtros);
   const ciclo = vista(cobranza, add(pagosC, capCred, capex));

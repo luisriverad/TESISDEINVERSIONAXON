@@ -4,7 +4,7 @@ import DATA from './data/model.json';
 import LOGO from './assets/axon-logo.png';
 import MARK from './assets/axon-mark.png';
 import AMERICAS from './data/americas.json';
-import { computeFlujo, cicloConDso, planDisposiciones, mesCorto, REDONDEO, N_MESES, type Flujo, type Vista, type Plan } from './lib/flujo';
+import { computeFlujo, cicloConDso, hitosCiclo, planDisposiciones, mesCorto, REDONDEO, N_MESES, type Flujo, type Vista, type Plan } from './lib/flujo';
 import { geoArea, geoAzimuthalEqualArea, geoPath } from 'd3-geo';
 
 // ===================== Marca AXON =====================
@@ -870,10 +870,11 @@ function PlanChart({ P, F }: { P: Plan; F: Flujo }) {
 
 const COBERTURA_DEF = 1000000; // reserva adicional de cobertura en el capital nuevo
 const PRIMERA_DEF = 20; // jul-27 (inicio del 3er trimestre)
-const planDe = (M: Model, F: Flujo) => planDisposiciones(F, 14, M.plan?.colchonMeses ?? 1, M.plan?.primera ?? PRIMERA_DEF, M.plan?.cobertura ?? COBERTURA_DEF);
+const COLCHON_MESES = 3; // colchón de caja fijo: 3 meses de egreso operativo
+const planDe = (M: Model, F: Flujo) => planDisposiciones(F, 14, COLCHON_MESES, M.plan?.primera ?? PRIMERA_DEF, M.plan?.cobertura ?? COBERTURA_DEF);
 function PlanDisposiciones({ M, R, F, set }: { M: Model; R: Result; F: Flujo; set: (f: (m: Model) => void) => void }) {
   const P = useMemo(() => planDe(M, F), [M, F]);
-  const upd = (k: 'primera' | 'colchonMeses' | 'cobertura', v: number) => set(m => { m.plan = { ...(m.plan ?? { inicio: 14, colchonMeses: 1, primera: PRIMERA_DEF }), inicio: 14, [k]: v }; });
+  const upd = (k: 'primera' | 'cobertura', v: number) => set(m => { m.plan = { ...(m.plan ?? { inicio: 14, colchonMeses: COLCHON_MESES, primera: PRIMERA_DEF }), inicio: 14, colchonMeses: COLCHON_MESES, [k]: v }; });
   const con = P.disp.filter(d => d.monto > 0.5);
   const lab = { font: `650 10px ${FONT}`, textTransform: 'uppercase' as const, letterSpacing: '.16em', color: C.ink };
   return (
@@ -888,7 +889,7 @@ function PlanDisposiciones({ M, R, F, set }: { M: Model; R: Result; F: Flujo; se
         </label>
         <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <span style={lab}>Colchón de caja</span>
-          <Segmented value={P.colchonMeses} onChange={v => upd('colchonMeses', v)} options={[0, 1, 2, 3].map(v => ({ v, l: v ? `${v} ${v === 1 ? 'mes' : 'meses'}` : 'Sin colchón' }))} />
+          <span style={{ font: `400 13px ${FONT}`, color: C.ink }}>3 meses <span style={{ color: C.muted, fontWeight: 300 }}>({short(P.colchon)})</span></span>
         </span>
         <label style={{ display: 'flex', alignItems: 'center', gap: 10 }} title="Reserva adicional que entra con la primera disposición y se conserva en caja; no afecta la valuación">
           <span style={lab}>Cobertura adicional</span>
@@ -1016,6 +1017,12 @@ function FlujoTab({ M, R, set }: { M: Model; R: Result; set: (f: (m: Model) => v
   const mvs = (x: number) => `+${x} ${x === 1 ? 'mes' : 'meses'} vs. P&L`;
   const F = useMemo(() => computeFlujo(M, R), [M, R]);
   const PL = useMemo(() => planDe(M, F), [M, F]);
+  // Cuánto del capital nuevo financia el plazo de cobro (DSO): mismo modelo cobrando de contado
+  const finDso = useMemo(() => {
+    if (!(M.val.wc?.dso)) return 0;
+    const M0: Model = { ...M, val: { ...M.val, wc: { ...M.val.wc, dso: 0 } } };
+    return PL.total - planDe(M0, computeFlujo(M0, R)).total;
+  }, [M, R, PL]);
   const [vistaT, setVistaT] = useState<'anual' | 'mensual'>('anual');
   const h = F.h;
   const anios = [{ l: '2026', s: 'nov-25 a dic-26', a: 0, b: 14 }, { l: '2027', a: 14, b: 26 }, { l: '2028', a: 26, b: 38 }, { l: '2029', a: 38, b: 50 }, { l: '2030', a: 50, b: 62 }];
@@ -1049,7 +1056,7 @@ function FlujoTab({ M, R, set }: { M: Model; R: Result; set: (f: (m: Model) => v
         { label: '+ Crédito, CAPEX y capital de trabajo', sub: `Pago de capital · CAPEX · cobro ${M.val.wc?.dso ?? 30} d · pago ${M.val.wc?.dpo ?? 30} d`, value: short(F.wc.necesidad), note: `+${short(F.plb.necesidad - F.pl.necesidad)} crédito y CAPEX, +${short(Math.max(0, F.wc.necesidad - F.plb.necesidad))} días de cartera y proveedores` },
         { label: '+ Ciclo comercial', sub: 'Necesidad máxima de caja', value: short(F.ciclo.necesidad), note: `Pico en ${mesCorto(F.ciclo.mesPico)} · ${F.ciclo.mesRecupera >= 0 ? `caja positiva desde ${mesCorto(F.ciclo.mesRecupera)}` : 'aún negativa a dic-30'}`, tone: 'neg' },
         { label: 'Equivale a', sub: 'Egreso mensual promedio 2027', value: F.mesesOperacion.toFixed(1), unit: 'meses', note: `${short(F.operacionMensual)} al mes de egreso operativo (sin capital del crédito ni CAPEX)` },
-        { label: 'Capital nuevo total', sub: `Plan de disposiciones desde ${mesCorto(PL.primera)}`, value: short(PL.total), hl: 'Necesidad de nuevo capital', note: `${PL.n} disposiciones trimestrales · incluye colchón de ${short(PL.colchon)}${PL.cobertura ? ` y cobertura de ${short(PL.cobertura)}` : ''}` },
+        { label: 'Capital nuevo total', sub: `Plan de disposiciones desde ${mesCorto(PL.primera)}`, value: short(PL.total), hl: 'Necesidad de nuevo capital', note: `${PL.n} disposiciones trimestrales · incluye colchón de ${short(PL.colchon)}${PL.cobertura ? `, cobertura de ${short(PL.cobertura)}` : ''}${finDso > 0.5 ? ` y ${short(finDso)} para financiar el cobro a ${M.val.wc?.dso} días` : ''}` },
         { label: 'Participación del inversionista', sub: 'Post-money', value: pct(ratio(PL.total, R.v.equity + PL.total), 1), hl: 'Para quien mete el capital', note: `${short(PL.total)} sobre post-money de ${short(R.v.equity + PL.total)} (pre-money ${short(R.v.equity)} de Valuación)` },
       ]} />
 
@@ -1150,10 +1157,10 @@ function FlujoTab({ M, R, set }: { M: Model; R: Result; set: (f: (m: Model) => v
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 10 }}>
           {[
             ['Base', 'P&L mensual del modelo: meses de nov-25 a dic-27 y años 2028–2030 repartidos en 12 meses iguales. Incluye carga social, incrementos e inflación de Supuestos.'],
-            ['Clientes', `Cliente por cliente desde la Cartera de Clientes. Existentes (con ingresos en 2026): cobran como en el P&L más ${M.val.wc?.dso ?? 30} días de cartera. Nuevos (primer ingreso en 2027): pasan por el ciclo comercial desde su firma, que es el mes en que la cartera los registra.`],
+            ['Clientes', `Cliente por cliente desde la Cartera de Clientes. Todos los clientes pagan a ${M.val.wc?.dso ?? 30} días por política de proveedores (desarrollo y mantenimiento). Existentes (con ingresos en 2026): cobran lo del P&L a ${M.val.wc?.dso ?? 30} días. Nuevos (primer ingreso en 2027): pasan por el ciclo comercial desde su firma, que es el mes en que la cartera los registra.`],
             ['Desarrollo de clientes nuevos', `Se cobra 50% en la firma + ${h.L1} meses (PAGO 50%, día ${h.diaPago1} del ciclo) y 50% en la firma + ${h.L2} meses (PAGO FINIQUITO, día ${h.diaFiniquito}). Las comisiones se pagan cuando el cliente paga.`],
-            ['Mantenimiento de clientes nuevos', `Se factura desde la firma + ${h.Lmant} meses (mes ${h.mesMant} del ciclo) y se cobra ${h.Ldso} mes después. Si el cliente no tiene desarrollo, se cobra desde el mes del primer pago (firma + ${h.L1}).`],
-            ['2028–2030', `Todo el desarrollo son proyectos nuevos con ciclo comercial. Cada cliente sigue pagando su mantenimiento de dic-27; el mantenimiento adicional son clientes nuevos y se factura ${Math.max(0, h.Lmant - h.pMant)} meses después que en el P&L, más ${h.Ldso} mes de cobranza. Los meses se redondean al más cercano (30.5 días).`],
+            ['Mantenimiento de clientes nuevos', `Se factura desde la firma + ${h.Lmant} meses (mes ${h.mesMant} del ciclo) y se cobra a ${M.val.wc?.dso ?? 30} días. Si el cliente no tiene desarrollo, se cobra desde el mes del primer pago (firma + ${h.L1}).`],
+            ['2028–2030', `Todo el desarrollo son proyectos nuevos con ciclo comercial. Cada cliente sigue pagando su mantenimiento de dic-27; el mantenimiento adicional son clientes nuevos y se factura ${Math.max(0, h.Lmant - h.pMant)} meses después que en el P&L, más ${M.val.wc?.dso ?? 30} días de cobranza. Los cobros usan días exactos (÷ 30.5): una parte cae en el mes siguiente y otra en el posterior.`],
             ['Egresos', `Nómina (sueldo + carga social), impuestos e intereses se pagan en el mes. El crédito bancario ya se dispuso: no entra dinero, y su capital se paga cada mes desde ene-27 por la prórroga. El CAPEX sale de caja en el mes de compra; la D&A no es salida de efectivo. La PTU se paga en mayo del año siguiente. El ISR se paga en el mes en que se devenga. Proveedores y gastos de terceros (costos directos sin nómina, gasto operativo, marketing, otros) se pagan a ${M.val.wc?.dpo ?? 30} días.`],
             ['Necesidad de caja', 'El punto más bajo de la caja acumulada: es el capital que hay que tener disponible para operar sin quedarse sin efectivo. Se compara contra el egreso mensual promedio de 2027.'],
           ].map(([t, d]) => (
@@ -1209,19 +1216,19 @@ function Slider({ value, min, max, step, onChange, label }: { value: number; min
 }
 
 type IncCfg = { incK: 'precioInc' | 'sueldoInc'; desdeK: 'precioDesde' | 'sueldoDesde'; eyebrow: string; title: string; sub: string; max: number };
-const INC_PRECIO: IncCfg = { incK: 'precioInc', desdeK: 'precioDesde', eyebrow: 'Precios', title: 'Incremento de precios', sub: 'Aumento sobre el precio del desarrollo inicial a partir del mes que elijas; las mensualidades de mantenimiento no llevan este incremento (solo inflación). Se suma al aumento anual de precio de la tabla Crecimiento 2028–2030.', max: 30 };
+const INC_PRECIO: IncCfg = { incK: 'precioInc', desdeK: 'precioDesde', eyebrow: 'Precios', title: 'Incremento de precios', sub: 'Aumento anual sobre el precio del desarrollo inicial: se aplica a partir del mes que elijas y se repite en cada aniversario. Alimenta la tabla Crecimiento 2028–2030. Las mensualidades de mantenimiento no llevan este incremento (solo inflación).', max: 30 };
 const INC_SUELDO: IncCfg = { incK: 'sueldoInc', desdeK: 'sueldoDesde', eyebrow: 'Sueldos', title: 'Incremento de sueldos', sub: 'Aumento sobre la nómina de todos los puestos (administrativos y personal directo, con su carga social) a partir del mes que elijas. Se refleja en el P&L.', max: 30 };
 
 // Crecimiento 2028–2030 (volumen y precio del desarrollo inicial): se captura en Supuestos y alimenta Valuación
 function CrecimientoCard({ M, R, set }: { M: Model; R: Result; set: (f: (m: Model) => void) => void }) {
-  const row = (k: 'volMeta' | 'precioMeta') => M.val[k].map((x, i) => <td key={i} style={tdBase}><NumInput kind="pct" width={70} value={x} onChange={nv => set(m => { m.val[k][i] = nv; })} /></td>);
+  const row = (k: 'volMeta') => M.val[k].map((x, i) => <td key={i} style={tdBase}><NumInput kind="pct" width={70} value={x} onChange={nv => set(m => { m.val[k][i] = nv; })} /></td>);
   return (
     <Card eyebrow="Crecimiento" title="Crecimiento 2028–2030" sub="Crecimiento de volumen de clientes y aumento de precio del desarrollo inicial (adicional a la inflación). Alimenta el P&L y la Valuación." pad={false}>
       <table style={{ borderCollapse: 'separate', borderSpacing: 0, width: '100%' }}>
         <thead><tr><th style={{ ...th, textAlign: 'left' }}>Supuesto</th>{['2028', '2029', '2030'].map(y => <th key={y} style={th}>{y}</th>)}</tr></thead>
         <tbody>
           <tr><td style={{ ...tdBase, textAlign: 'left' }}>Crecimiento de volumen</td>{row('volMeta')}</tr>
-          <tr><td style={{ ...tdBase, textAlign: 'left' }}>Aumento de precio del desarrollo inicial<span style={{ display: 'block', font: `300 10.5px ${FONT}`, color: C.faint }}>No aplica a las mensualidades</span></td>{row('precioMeta')}</tr>
+          <tr><td style={{ ...tdBase, textAlign: 'left' }}>Aumento de precio del desarrollo inicial<span style={{ display: 'block', font: `300 10.5px ${FONT}`, color: C.faint }}>Se alimenta del slider de Incremento de precios · no aplica a las mensualidades</span></td>{R.precioEfectivo.map((x, i) => <td key={i} style={{ ...tdBase, color: C.ink }}>{pct(x)}</td>)}</tr>
           <tr><td style={{ ...tdBase, textAlign: 'left', fontWeight: 650, color: C.ink, background: C.tint }}>Ventas proyectadas</td>{[2, 3, 4].map(i => <td key={i} style={{ ...tdBase, fontWeight: 650, color: C.ink, background: C.tint }}>{short(R.annual.venta[i])}</td>)}</tr>
         </tbody>
       </table>
@@ -1410,20 +1417,22 @@ function CargaCard({ M, R, set }: { M: Model; R: Result; set: (f: (m: Model) => 
   );
 }
 
-const CICLO_DEF = [{"etapa": "ANÁLISIS DE MANAGEMENT Y PROCESOS / NDA", "dias": 30}, {"etapa": "PRIMERA MAQUETA", "dias": 30}, {"etapa": "AJUSTES A LA ARQUITECTURA (MAQUETAS)", "dias": 30}, {"etapa": "CIERRE, FIRMA DE CONTRATO Y ALTA COMO PROVEEDOR", "dias": 30}, {"etapa": "COMIENZO DESARROLLO Y FACTURACIÓN 50%", "dias": 15}, {"etapa": "PAGO 50%", "dias": 30}, {"etapa": "ENTREGA FINAL / GO-LIVE Y FACTURACIÓN 50%", "dias": 60}, {"etapa": "PAGO FINIQUITO 50%", "dias": 30}];
+const CICLO_DEF = [{"etapa": "ANÁLISIS DE MANAGEMENT Y PROCESOS / NDA", "dias": 30}, {"etapa": "PRIMERA MAQUETA", "dias": 30}, {"etapa": "AJUSTES A LA ARQUITECTURA (MAQUETAS)", "dias": 30}, {"etapa": "CIERRE, FIRMA DE CONTRATO Y ALTA COMO PROVEEDOR", "dias": 30}, {"etapa": "COMIENZO DESARROLLO Y FACTURACIÓN 50%", "dias": 15}, {"etapa": "PAGO 50%", "dias": 30}, {"etapa": "PRODUCCIÓN / Go-Live", "dias": 60}, {"etapa": "PAGO FINIQUITO 50%", "dias": 30}];
 const esPago = (n: string) => /^PAGO/i.test(n.trim());
 const mesMantenimiento = (total: number) => Math.floor(total / 30.5) + 1;
 function CicloCard({ M, set }: { M: Model; set: (f: (m: Model) => void) => void }) {
-  const et = cicloConDso(M.ciclo ?? CICLO_DEF, M.val.wc?.dso ?? 30);
-  const total = et.reduce((s, e) => s + e.dias, 0);
-  const iPago = et.findIndex(e => esPago(e.etapa));
-  const diaPago = iPago >= 0 ? et.slice(0, iPago + 1).reduce((s, e) => s + e.dias, 0) : total;
+  // Las etapas de pago corren en paralelo al desarrollo (ver hitosCiclo)
+  const HC = hitosCiclo(M.ciclo ?? CICLO_DEF, M.val.wc?.dso ?? 30);
+  const et = HC.tramos, total = HC.totalProceso, H = HC.horizonte || 1;
+  const diaPago = HC.diaPago1;
   const mesMant = mesMantenimiento(total);
+  // El mantenimiento se factura desde el go-live y, como todo, se cobra a DSO días
+  const dso = M.val.wc?.dso ?? 30, diaCobroMant = total + dso, mesCobroMant = mesMantenimiento(diaCobroMant);
   const tono = (k: number) => lerpHex('#FDF3C8', '#C99700', et.length > 1 ? k / (et.length - 1) : 0);
   const upd = (i: number, f: (e: { etapa: string; dias: number }) => void) => set(m => { m.ciclo = (m.ciclo ?? CICLO_DEF).map(x => ({ ...x })); f(m.ciclo[i]); });
   const lab = { font: `650 10px ${FONT}`, textTransform: 'uppercase' as const, letterSpacing: '.16em', color: C.ink };
   const big = { font: `200 46px/1 ${FONT}`, letterSpacing: '-0.04em', fontVariantNumeric: 'tabular-nums' as const, marginTop: 6 };
-  const tick = Math.max(30, Math.ceil(total / 10 / 30) * 30);
+  const tick = Math.max(30, Math.ceil(H / 10 / 30) * 30);
   const fixedRow = (color: string, nombre: string, tramo: string, valor: React.ReactNode, strong?: boolean) => (
     <div style={{ display: 'grid', gridTemplateColumns: '14px minmax(0, 1fr) 120px 84px', alignItems: 'center', gap: 12, padding: '9px 0', borderBottom: `1px solid ${C.line2}`, background: strong ? C.tint : undefined }}>
       <span style={{ width: 10, height: 10, borderRadius: 99, background: color, border: `1px solid ${C.ink}` }} />
@@ -1432,64 +1441,69 @@ function CicloCard({ M, set }: { M: Model; set: (f: (m: Model) => void) => void 
       <span style={{ justifySelf: 'end', paddingRight: 10, font: `600 13px ${FONT}`, color: C.ink, whiteSpace: 'nowrap' }}>{valor}</span>
     </div>
   );
-  let acc = 0;
   return (
     <Card eyebrow="Ciclo comercial" title="Días que pasan del primer contacto al primer pago" sub="Vender IA avanzada a la dirección de empresas medianas y grandes pasa por análisis, maquetas, ajustes de arquitectura y un alta formal como proveedor. Este ciclo explica por qué el ingreso llega meses después de la inversión comercial.">
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 0, marginBottom: 22, borderTop: `1px solid ${C.line2}`, borderBottom: `1px solid ${C.line2}` }}>
         {[
           ['Primer pago', diaPago, `≈ ${(diaPago / 30.5).toFixed(1)} meses del primer contacto`],
-          ['Ciclo completo', total, 'Hasta el pago del finiquito'],
-          ['Mantenimiento', null, `Arranca en el mes ${mesMant} (${total} días ÷ 30.5)`],
+          ['Ciclo completo', HC.diaFiniquito, `Hasta el pago del finiquito · go-live en el día ${total}`],
+          ['Mantenimiento', null, `Se factura desde el mes ${mesMant} (go-live, día ${total}) y se cobra a ${dso} días: primer cobro en el día ${diaCobroMant}, mes ${mesCobroMant}`],
         ].map(([l, v, n], k) => (
           <div key={l as string} style={{ padding: '16px 18px 14px', paddingLeft: k ? 18 : 0, borderLeft: k ? `1px solid ${C.line2}` : undefined }}>
             <div style={lab}>{l as string}</div>
-            <div style={big}>{v === null ? <>Mes {mesMant}</> : <>{v as number}<span style={{ font: `300 15px ${FONT}`, color: C.muted, marginLeft: 6 }}>días</span></>}</div>
+            <div style={big}>{v === null ? <>Mes {mesCobroMant}<span style={{ font: `300 15px ${FONT}`, color: C.muted, marginLeft: 6 }}>primer cobro</span></> : <>{v as number}<span style={{ font: `300 15px ${FONT}`, color: C.muted, marginLeft: 6 }}>días</span></>}</div>
             <div style={{ font: `300 11.5px ${FONT}`, color: C.muted, marginTop: 6 }}>{n as string}</div>
           </div>
         ))}
       </div>
 
-      {/* línea de tiempo */}
+      {/* línea de tiempo: proceso de desarrollo arriba; los cobros (DSO) corren en paralelo abajo */}
       <div style={{ position: 'relative' }}>
-        <div style={{ display: 'flex', height: 30, borderRadius: 9, overflow: 'hidden', border: `1px solid ${C.line}` }}>
-          {et.map((e, k) => (
-            <div key={k} title={`${e.etapa}: ${e.dias} días`} style={{ width: `${total ? (e.dias / total) * 100 : 0}%`, background: tono(k), borderRight: k < et.length - 1 ? '1px solid #fff' : undefined, display: 'grid', placeItems: 'center', font: `${esPago(e.etapa) ? 650 : 400} 10.5px ${FONT}`, color: k >= et.length * 0.6 ? '#fff' : C.ink2, overflow: 'hidden', whiteSpace: 'nowrap', transition: 'width .25s' }}>
-              {total && e.dias / total > 0.045 ? (esPago(e.etapa) ? `$ ${e.dias}` : e.dias) : ''}
+        <div style={{ display: 'flex', height: 30, overflow: 'hidden', border: `1px solid ${C.line}`, width: `${(total / H) * 100}%`, transition: 'width .25s' }}>
+          {et.map((e, k) => e.pago ? null : (
+            <div key={k} title={`${e.etapa}: ${e.dias} días`} style={{ width: `${total ? (e.dias / total) * 100 : 0}%`, background: tono(k), borderRight: '1px solid #fff', display: 'grid', placeItems: 'center', font: `400 10.5px ${FONT}`, color: k >= et.length * 0.6 ? '#fff' : C.ink2, overflow: 'hidden', whiteSpace: 'nowrap', transition: 'width .25s' }}>
+              {total && e.dias / H > 0.045 ? e.dias : ''}
             </div>
           ))}
         </div>
-        {total > 0 && <span title="Primer pago" style={{ position: 'absolute', top: -6, bottom: -6, left: `${(diaPago / total) * 100}%`, borderLeft: `1.5px solid ${C.ink}` }} />}
+        <div style={{ position: 'relative', height: 18, marginTop: 4 }}>
+          {et.map((e, k) => !e.pago ? null : (
+            <div key={k} title={`${e.etapa}: día ${e.ini} → ${e.fin} (DSO, en paralelo)`} style={{ position: 'absolute', top: 0, bottom: 0, left: `${(e.ini / H) * 100}%`, width: `${(e.dias / H) * 100}%`, background: C.gold, display: 'grid', placeItems: 'center', font: `650 10px ${FONT}`, color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', transition: 'all .25s' }}>
+              {e.dias / H > 0.05 ? `$ cobro ${e.dias}d` : '$'}
+            </div>
+          ))}
+        </div>
+        <span title="Primer pago" style={{ position: 'absolute', top: -6, bottom: -6, left: `${(diaPago / H) * 100}%`, borderLeft: `1.5px solid ${C.ink}` }} />
       </div>
       <div style={{ position: 'relative', height: 16, marginTop: 6, font: `300 10px ${FONT}`, color: C.faint }}>
-        {Array.from({ length: Math.floor(total / tick) + 1 }, (_, i) => i * tick).map(d => (
-          <span key={d} style={{ position: 'absolute', left: `${(d / total) * 100}%`, transform: d ? 'translateX(-50%)' : undefined }}>{d ? `${d}d` : 'Día 0'}</span>
+        {Array.from({ length: Math.floor(H / tick) + 1 }, (_, i) => i * tick).map(d => (
+          <span key={d} style={{ position: 'absolute', left: `${(d / H) * 100}%`, transform: d ? 'translateX(-50%)' : undefined }}>{d ? `${d}d` : 'Día 0'}</span>
         ))}
       </div>
 
       <div style={{ marginTop: 18, borderTop: `1px solid ${C.ink}` }}>
         {fixedRow(C.surface, 'PRIMER CONTACTO', 'día 0', 'Día 0')}
         {et.map((e, k) => {
-          const ini = acc; acc += e.dias;
-          const pago = esPago(e.etapa);
+          const ini = e.ini, fin = e.fin, pago = e.pago;
           return (
             <div key={k} style={{ display: 'grid', gridTemplateColumns: '14px minmax(0, 1fr) 120px 84px', alignItems: 'center', gap: 12, padding: '7px 0', borderBottom: `1px solid ${C.line2}` }}>
               <span style={{ width: 10, height: 10, borderRadius: 3, background: tono(k), border: `1px solid ${C.line}` }} />
               <input value={e.etapa} onChange={ev => upd(k, x => { x.etapa = ev.target.value; })} style={{ border: 0, outline: 'none', background: 'transparent', font: `${pago ? 600 : 300} 12.5px ${FONT}`, color: pago ? C.gold : C.ink, letterSpacing: '.02em', minWidth: 0 }} />
-              <span style={{ font: `300 11.5px ${FONT}`, color: C.faint, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>día {ini} → <span style={{ color: C.ink2 }}>{acc}</span></span>
+              <span style={{ font: `300 11.5px ${FONT}`, color: C.faint, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{pago ? 'cobro ' : ''}día {ini} → <span style={{ color: C.ink2 }}>{fin}</span></span>
               <span style={{ justifySelf: 'end' }}>{pago
                 ? <span title="Se alimenta de los días de cartera (DSO) en Capital de trabajo" style={{ display: 'inline-block', width: 64, textAlign: 'right', padding: '4px 7px', font: `400 13px ${FONT}`, fontVariantNumeric: 'tabular-nums', color: C.ink }}>{e.dias}<span style={{ display: 'block', font: `300 9.5px ${FONT}`, color: C.faint }}>= DSO</span></span>
                 : <NumInput kind="num" value={e.dias} width={64} onChange={v => upd(k, x => { x.dias = Math.max(0, Math.round(v)); })} />}</span>
             </div>
           );
         })}
-        {fixedRow(C.ink, 'COMIENZA ADMINISTRACIÓN Y MANTENIMIENTO', `${total} días ÷ 30.5`, `Mes ${mesMant}`, true)}
+        {fixedRow(C.ink, 'COMIENZA ADMINISTRACIÓN Y MANTENIMIENTO', `factura mes ${mesMant} · cobro a ${dso} d`, `Mes ${mesCobroMant}`, true)}
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 10, marginTop: 18 }}>
         {[
           ['Lo que implica', `Un cliente que se contacta hoy hace su primer pago en el día ${diaPago} (~${Math.round(diaPago / 30.5)} ${Math.round(diaPago / 30.5) === 1 ? 'mes' : 'meses'}). El equipo comercial debe generar oportunidades con ${Math.ceil(diaPago / 30.5 / 3)} ${Math.ceil(diaPago / 30.5 / 3) === 1 ? 'trimestre' : 'trimestres'} de anticipación.`],
           ['Para la caja', `Durante ${diaPago} días se paga nómina, maquetas, marketing y preventa sin ingreso de ese cliente: es parte de la curva J y de la necesidad de capital.`],
-          ['Para el inversionista', `El ciclo es largo, pero desde el mes ${mesMant} el cliente paga administración y mantenimiento de forma recurrente, un ingreso difícil de reemplazar.`],
+          ['Para el inversionista', `El ciclo es largo, pero desde el mes ${mesCobroMant} el cliente paga administración y mantenimiento de forma recurrente (se factura desde el mes ${mesMant} y se cobra a ${dso} días), un ingreso difícil de reemplazar.`],
         ].map(([t, d]) => (
           <div key={t} style={{ padding: '12px 14px', borderRadius: 0, background: C.tint, border: `1px solid ${C.line2}` }}>
             <div style={{ font: `600 9.5px ${FONT}`, letterSpacing: '.14em', textTransform: 'uppercase', color: C.gold }}>{t}</div>
@@ -2096,8 +2110,8 @@ function aiContext(M: Model, R: Result): string {
       sensibilidad_wacc_vs_g: { wacc: V.sensA.rows, g: V.sensA.cols, valor_capital: V.sensA.m.map(arr) },
       sensibilidad_prima_startup_vs_g: { prima: V.sensB.rows, g: V.sensB.cols, valor_capital: V.sensB.m.map(arr) },
     },
-    ciclo_comercial: (() => { const et = cicloConDso(M.ciclo ?? [], M.val.wc?.dso ?? 30); const total = et.reduce((s, e) => s + e.dias, 0); let acc = 0;
-      return { descripcion: 'días del primer contacto (día 0) a cada hito; la administración y mantenimiento arranca el mes siguiente al total (días ÷ 30.5)', hitos: [{ etapa: 'PRIMER CONTACTO', dia: 0 }, ...et.map(e => ({ etapa: e.etapa, dias_etapa: e.dias, dia_acumulado: (acc += e.dias) }))], total_dias: total, mantenimiento_desde_mes: Math.floor(total / 30.5) + 1 }; })(),
+    ciclo_comercial: (() => { const HC = hitosCiclo(M.ciclo ?? [], M.val.wc?.dso ?? 30);
+      return { descripcion: 'días desde el primer contacto (día 0). Las etapas de PAGO duran el DSO y corren en paralelo al desarrollo (no lo retrasan); el mantenimiento arranca el mes siguiente al go-live (días del proceso ÷ 30.5)', hitos: [{ etapa: 'PRIMER CONTACTO', dia: 0 }, ...HC.tramos.map(e => ({ etapa: e.etapa, dias_etapa: e.dias, de_dia: e.ini, a_dia: e.fin, en_paralelo: e.pago }))], dias_proceso_hasta_go_live: HC.totalProceso, dia_primer_pago: HC.diaPago1, dia_pago_finiquito: HC.diaFiniquito, mantenimiento_desde_mes: Math.floor(HC.totalProceso / 30.5) + 1 }; })(),
     necesidad_de_capital: (() => { const F = computeFlujo(M, R); return {
       registro_cartera: 'firma de contrato', meses_desde_firma: { primer_pago: F.h.L1, finiquito: F.h.L2, mantenimiento_cobrado: F.h.Lmant + F.h.Ldso },
       clientes_nuevos_con_ciclo: F.clientes.filter(c => c.nuevo).map(c => c.name), clientes_existentes: F.clientes.filter(c => !c.nuevo).map(c => c.name),
@@ -2281,14 +2295,18 @@ function wireAdmin(m: Model): boolean {
   let changed = false;
   // Solo existe el escenario Meta
   if (m.val.escenario !== 2) { m.val.escenario = 2; changed = true; }
+  // Etapa renombrada: ENTREGA FINAL / GO-LIVE Y FACTURACIÓN 50% → PRODUCCIÓN / Go-Live
+  m.ciclo?.forEach(e => { if (e.etapa.trim() === 'ENTREGA FINAL / GO-LIVE Y FACTURACIÓN 50%') { e.etapa = 'PRODUCCIÓN / Go-Live'; changed = true; } });
   // Mantenimiento con contrato anual: la mensualidad queda fija después del primer mes
   m.clients.forEach(c => { const f = fijarMant(c.mant2, c.mant1[c.mant1.length - 1] ?? 0); if (JSON.stringify(f) !== JSON.stringify(c.mant2)) { c.mant2 = f; changed = true; } });
   // Primera disposición del capital nuevo: julio 2027 (inicio del T3)
   if (!m.migr?.primeraJul) { m.plan = { inicio: 14, colchonMeses: m.plan?.colchonMeses ?? 1, primera: 20 }; m.migr = { ...(m.migr ?? {}), primeraJul: true }; changed = true; }
   if (m.capex && !m.capex.equipos.porPersona && !m.migr?.equiposPersona) { m.capex.equipos = { ...m.capex.equipos, cantidad: 0, precio: 25000, porPersona: true }; m.migr = { ...(m.migr ?? {}), equiposPersona: true }; changed = true; }
   if (m.capex === undefined) { m.capex = { equipos: { cantidad: 0, precio: 25000, mes: 14, anios: 3, porPersona: true }, oficinas: { monto: 500000, mes: 20, anios: 5 } }; changed = true; }
-  if (m.ciclo === undefined || m.ciclo[0]?.etapa === 'Primer contacto y calificación') { m.ciclo = [{"etapa": "ANÁLISIS DE MANAGEMENT Y PROCESOS / NDA", "dias": 30}, {"etapa": "PRIMERA MAQUETA", "dias": 30}, {"etapa": "AJUSTES A LA ARQUITECTURA (MAQUETAS)", "dias": 30}, {"etapa": "CIERRE, FIRMA DE CONTRATO Y ALTA COMO PROVEEDOR", "dias": 30}, {"etapa": "COMIENZO DESARROLLO Y FACTURACIÓN 50%", "dias": 15}, {"etapa": "PAGO 50%", "dias": 30}, {"etapa": "ENTREGA FINAL / GO-LIVE Y FACTURACIÓN 50%", "dias": 60}, {"etapa": "PAGO FINIQUITO 50%", "dias": 30}]; changed = true; }
+  if (m.ciclo === undefined || m.ciclo[0]?.etapa === 'Primer contacto y calificación') { m.ciclo = [{"etapa": "ANÁLISIS DE MANAGEMENT Y PROCESOS / NDA", "dias": 30}, {"etapa": "PRIMERA MAQUETA", "dias": 30}, {"etapa": "AJUSTES A LA ARQUITECTURA (MAQUETAS)", "dias": 30}, {"etapa": "CIERRE, FIRMA DE CONTRATO Y ALTA COMO PROVEEDOR", "dias": 30}, {"etapa": "COMIENZO DESARROLLO Y FACTURACIÓN 50%", "dias": 15}, {"etapa": "PAGO 50%", "dias": 30}, {"etapa": "PRODUCCIÓN / Go-Live", "dias": 60}, {"etapa": "PAGO FINIQUITO 50%", "dias": 30}]; changed = true; }
   if (m.val.wc === undefined) { m.val.wc = { dso: 30, credito: 1, dio: 0, dpo: 30, base: 360 }; changed = true; }
+  // Política de proveedores de los clientes: TODO se cobra a DSO días (desarrollo y mantenimiento) → 100% a crédito
+  if (!m.migr?.credito100 && m.val.wc) { m.val.wc = { ...m.val.wc, credito: 1 }; m.migr = { ...(m.migr ?? {}), credito100: true }; changed = true; }
   if (m.params.amortizarPerdidas === undefined) { m.params.amortizarPerdidas = true; changed = true; }
   if (m.params.aplicarPTU === undefined) { m.params.aplicarPTU = true; m.params.ptu = 0; changed = true; }
   if (m.params.aplicarInflacion === undefined) { m.params.aplicarInflacion = true; changed = true; }
@@ -2352,13 +2370,23 @@ export default function AxonPLForecast() {
   // Los cambios se guardan solo al pulsar "Guardar"
   const [saved, setSaved] = useState(() => JSON.stringify(M));
   const unsaved = useMemo(() => JSON.stringify(M) !== saved, [M, saved]);
-  const [justSaved, setJustSaved] = useState(false);
-  const save = () => {
-    const s = JSON.stringify(M);
+  const [justSaved, setJustSaved] = useState<false | 'ok' | 'base' | 'error'>(false);
+  const mRef = useRef(M); mRef.current = M;
+  const save = async () => {
+    // Si hay una casilla en edición, se confirma primero (blur) y se espera a que el valor entre al modelo:
+    // así se guarda el 100% de lo capturado en todas las pestañas, incluso lo último que se tecleó
+    (document.activeElement as HTMLElement | null)?.blur?.();
+    await new Promise(r => setTimeout(r, 30));
+    const s = JSON.stringify(mRef.current);
     try { localStorage.setItem(STORE, s); localStorage.setItem(STORE_BASE, BASE); } catch { /* sin almacenamiento */ }
-    // En local también queda como versión de inicio (src/data/model.json) para el commit
-    if (import.meta.env.DEV) fetch('/api/guardar-modelo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: s }).catch(() => { /* */ });
-    setSaved(s); setJustSaved(true); setTimeout(() => setJustSaved(false), 1800);
+    setSaved(s);
+    let estado: 'ok' | 'base' | 'error' = 'ok';
+    // En local también queda como versión oficial de inicio (src/data/model.json) para el commit; se confirma que se escribió
+    if (import.meta.env.DEV) {
+      try { const r = await fetch('/api/guardar-modelo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: s }); estado = r.ok ? 'base' : 'error'; }
+      catch { estado = 'error'; }
+    }
+    setJustSaved(estado); setTimeout(() => setJustSaved(false), estado === 'error' ? 6000 : 2500);
   };
   useEffect(() => {
     if (!unsaved) return;
@@ -2372,7 +2400,9 @@ export default function AxonPLForecast() {
   const go = (id: ModId) => { setMod(id); try { history.replaceState(null, '', `#${id}`); } catch { /* */ } window.scrollTo({ top: 0 }); };
   const R = useMemo(() => compute(M), [M]);
   const set = (f: (m: Model) => void) => setM(prev => { const n = clone(prev); f(n); return n; });
-  const dirty = useMemo(() => JSON.stringify(M) !== JSON.stringify(DEFAULT), [M]);
+  // Base oficial ya con las migraciones aplicadas (si no, siempre parecería distinta y "Restablecer" nunca se iría)
+  const baseOficial = useMemo(() => { const d = clone(DEFAULT); wireAdmin(d); return d; }, []);
+  const dirty = useMemo(() => JSON.stringify(M) !== JSON.stringify(baseOficial), [M, baseOficial]);
   const [confirmReset, setConfirmReset] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);
   const aiCtx = useMemo(() => aiContext(M, R), [M, R]);
@@ -2408,12 +2438,13 @@ export default function AxonPLForecast() {
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
             <button onClick={save} title="Guardar la versión actual en este navegador"
               style={{ ...btn, minWidth: 112, background: C.ink, color: '#fff', borderColor: C.ink }}>
-              {justSaved ? 'Guardado ✓' : unsaved ? 'Guardar •' : 'Guardar'}
+              {justSaved === 'base' ? 'Guardado como oficial ✓' : justSaved === 'ok' ? 'Guardado ✓' : justSaved === 'error' ? 'Error al guardar' : unsaved ? 'Guardar •' : 'Guardar'}
             </button>
+            {justSaved === 'error' && <span style={{ font: `400 11px ${FONT}`, color: C.neg, maxWidth: 260, textAlign: 'right' }}>No se pudo escribir el archivo base. Revisa que la app esté corriendo (npm run dev) e inténtalo de nuevo.</span>}
             {unsaved && <button style={{ border: 0, background: 'transparent', padding: '2px 2px', cursor: 'pointer', font: `300 11.5px ${FONT}`, color: C.faint, textDecoration: 'underline', textDecorationColor: C.line, textUnderlineOffset: 3 }}
               onClick={() => { const m: Model = JSON.parse(saved); setM(m); }}>Volver a lo último guardado</button>}
-            {dirty && (confirmReset
-              ? <span style={{ display: 'flex', gap: 6 }}><button style={{ ...btn, background: C.ink, color: '#fff', borderColor: C.ink }} onClick={() => { setM(clone(DEFAULT)); setConfirmReset(false); }}>Confirmar</button><button style={btn} onClick={() => setConfirmReset(false)}>Cancelar</button></span>
+            {dirty && unsaved && (confirmReset
+              ? <span style={{ display: 'flex', gap: 6 }}><button style={{ ...btn, background: C.ink, color: '#fff', borderColor: C.ink }} onClick={() => { setM(clone(baseOficial)); setConfirmReset(false); }}>Confirmar</button><button style={btn} onClick={() => setConfirmReset(false)}>Cancelar</button></span>
               : <button style={{ border: 0, background: 'transparent', padding: '4px 2px', cursor: 'pointer', font: `300 11.5px ${FONT}`, color: C.faint, textDecoration: 'underline', textDecorationColor: C.line, textUnderlineOffset: 3 }} onClick={() => setConfirmReset(true)}>Restablecer supuestos</button>)}
             </div>
             <AIButton onClick={() => setAiOpen(true)} />

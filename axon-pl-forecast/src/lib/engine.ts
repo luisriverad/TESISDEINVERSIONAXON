@@ -144,6 +144,8 @@ export interface Result {
   m1: Series; m2: Series; annual: Series; acum1: number[]; acum2: number[]; acumY: number[];
   cred: Credit; clientsY2: { dev: number[]; mant: number[] }[];
   scen: { vol: number[]; precio: number[]; factor: number[]; label: string };
+  /** Aumento de precio efectivo del desarrollo inicial 2028–2030 vs. el año anterior */
+  precioEfectivo: number[];
   v: {
     rf: number; betaL: number; ke0: number; ke: number; kdAt: number; de: number; wacc: number; primaMkt: number;
     ventas: number[]; ebitda: number[]; daA: number[]; ebit: number[]; isrA: number[]; nopat: number[]; capexA: number[]; ctA: number[]; fcff: number[];
@@ -184,7 +186,9 @@ export function compute(M: Model): Result {
 
   // ---------- Escenario ----------
   const meta = V.escenario === 2;
-  const vol = meta ? V.volMeta : V.volBase, precio = meta ? V.precioMeta : V.precioBase;
+  // Con el slider de Supuestos (precioInc) el aumento de precio del desarrollo sale SOLO del slider; la tabla precioMeta ya no se usa
+  const precioSlider = P.precioInc !== undefined;
+  const vol = meta ? V.volMeta : V.volBase, precio = precioSlider ? [0, 0, 0] : meta ? V.precioMeta : V.precioBase;
   const factor: number[] = [];
   vol.forEach((g, i) => factor.push((i === 0 ? 1 : factor[i - 1]) * (1 + g) / (1 + V.volBase[i])));
   const label = meta ? `Meta (valuación +$${Math.round(V.meta / 1e6)}M)` : 'Base (plan original)';
@@ -236,8 +240,14 @@ export function compute(M: Model): Result {
   const m2: Partial<Series> = {};
   // Incremento de precios: multiplicador por mes de 2027 y proporción del año afectada en 2028–2030
   const pInc = P.precioInc ?? 0, pDesde = P.precioDesde ?? 0;
-  const pMesY2 = (i: number) => 1 + (i >= pDesde ? pInc : 0);
-  const pAnio = (y: number) => 1 + pInc * Math.min(12, Math.max(0, 12 * y - pDesde)) / 12; // y: 1 = 2027 … 4 = 2030
+  // Slider: el precio sube pInc a partir del mes elegido y otra vez en cada aniversario (aumento anual)
+  const fPrecio = (t: number) => (t >= pDesde ? Math.pow(1 + pInc, Math.floor((t - pDesde) / 12) + 1) : 1); // t: meses desde ene-27
+  const pMesY2 = (i: number) => (precioSlider ? fPrecio(i) : 1 + (i >= pDesde ? pInc : 0));
+  const pAnio = (y: number) => (precioSlider // y: 1 = 2027 … 4 = 2030
+    ? Array.from({ length: 12 }, (_, k) => fPrecio(12 * (y - 1) + k)).reduce((a, b) => a + b, 0) / 12
+    : 1 + pInc * Math.min(12, Math.max(0, 12 * y - pDesde)) / 12);
+  // Aumento de precio efectivo de cada año vs. el anterior (2028–2030), para mostrarlo en Supuestos
+  const precioEfectivo = [2, 3, 4].map(y => pAnio(y) / pAnio(y - 1) * (precioSlider ? 1 : 1 + precio[y - 2]) - 1);
   const sInc = P.sueldoInc ?? 0, sDesde = P.sueldoDesde ?? 0;
   const sMesY2 = (i: number) => 1 + (i >= sDesde ? sInc : 0);
   const sAnio = (y: number) => 1 + sInc * Math.min(12, Math.max(0, 12 * y - sDesde)) / 12;
@@ -391,7 +401,8 @@ export function compute(M: Model): Result {
     capexPlan: { cash: cxCash, da: cxDa, inversionAnual: cxAnual, daAnual: anualDe(cxDa), equiposNuevos: [0, 1, 2, 3, 4].map(y => (y && M.capex?.equipos.porPersona ? Math.max(0, hcTot[y] - hcTot[y - 1]) : 0)) },
     gastos: { opex, opexTot, admin, adminTot, dirTot, hcTot, mkt, mktTot, admin27, admin27Tot, dir27Tot, mkt27, mkt27Tot },
     m1: S1, m2: S2, annual: SA, acum1, acum2, acumY, cred, clientsY2,
-    scen: { vol, precio, factor, label },
+    scen: { vol, precio: precioEfectivo, factor, label },
+    precioEfectivo,
     v: {
       rf, betaL, ke0, ke, kdAt, de, wacc, primaMkt, ventas, ebitda, daA, ebit, isrA, nopat, capexA, ctA, fcff, periodo, factor: fac, pv,
       wc: { cxc, inv, cxp, ctn },
