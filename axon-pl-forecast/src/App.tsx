@@ -16,6 +16,10 @@ const C = {
 const FONT = "'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif";
 const STORE = 'axon-pl-forecast-v1';
 const DEFAULT: Model = DATA as unknown as Model;
+// Huella de los datos de inicio publicados (model.json). Si cambian (nuevo deploy), lo guardado en el navegador
+// con la versión anterior se descarta para que todos vean las cifras publicadas.
+const BASE = (() => { const t = JSON.stringify(DATA); let h = 5381; for (let i = 0; i < t.length; i++) h = (h * 33 + t.charCodeAt(i)) | 0; return (h >>> 0).toString(36); })();
+const STORE_BASE = STORE + ':base';
 const clone = <T,>(x: T): T => JSON.parse(JSON.stringify(x));
 
 // ===================== Formatos =====================
@@ -2215,7 +2219,8 @@ export default function AxonPLForecast() {
   const [M, setM] = useState<Model>(() => {
     try {
       const s = localStorage.getItem(STORE);
-      if (s) {
+      if (s && localStorage.getItem(STORE_BASE) !== BASE) { localStorage.removeItem(STORE); localStorage.removeItem(STORE_BASE); }
+      else if (s) {
         const m: Model = JSON.parse(s);
         // Renombra los conceptos genéricos guardados ("Concepto N" → "OTRO")
         m.opex.forEach(l => { if (/^Concepto \d+$/.test(l.name)) l.name = 'OTRO'; });
@@ -2238,7 +2243,7 @@ export default function AxonPLForecast() {
   const [justSaved, setJustSaved] = useState(false);
   const save = () => {
     const s = JSON.stringify(M);
-    try { localStorage.setItem(STORE, s); } catch { /* sin almacenamiento */ }
+    try { localStorage.setItem(STORE, s); localStorage.setItem(STORE_BASE, BASE); } catch { /* sin almacenamiento */ }
     // En local también queda como versión de inicio (src/data/model.json) para el commit
     if (import.meta.env.DEV) fetch('/api/guardar-modelo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: s }).catch(() => { /* */ });
     setSaved(s); setJustSaved(true); setTimeout(() => setJustSaved(false), 1800);
