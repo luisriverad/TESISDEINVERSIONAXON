@@ -74,9 +74,14 @@ export function clienteNuevoAuto(dev: number[], mant: number[]) {
   return !y1 && y2;
 }
 
+/** Ciclo comercial efectivo: las etapas de PAGO duran los días de cartera (DSO) del capital de trabajo */
+export function cicloConDso<T extends { etapa: string; dias: number }>(ciclo: T[], dso: number): T[] {
+  return ciclo.map(e => (/^PAGO/i.test(e.etapa.trim()) ? { ...e, dias: Math.max(0, Math.round(dso)) } : e));
+}
+
 export function computeFlujo(M: Model, R: Result): Flujo {
   // ---------- Hitos del ciclo comercial, contados desde la firma ----------
-  const et = M.ciclo ?? [];
+  const et = cicloConDso(M.ciclo ?? [], M.val.wc?.dso ?? 30);
   const acc: number[] = []; et.reduce((s, e, i) => (acc[i] = s + e.dias), 0);
   const total = acc[acc.length - 1] ?? 0;
   const pagos = et.map((e, i) => (/^PAGO/i.test(e.etapa.trim()) ? i : -1)).filter(i => i >= 0);
@@ -91,12 +96,13 @@ export function computeFlujo(M: Model, R: Result): Flujo {
   const Lmant = Math.max(L2 + 1, mesMant - mes(diaFirma));             // siempre después del finiquito
   const Ldso = mes(W.dso), Ldpo = mes(W.dpo), credito = W.credito;
 
-  // Factor de la cartera existente después de dic-27 (igual que el motor anual): churn mensual, precio e inflación
+  // Factor de la cartera existente después de dic-27 (igual que el motor anual): el contrato es anual, así que
+  // la mensualidad es fija dentro de cada año; al renovar (cada enero desde 2028) se aplican churn e inflación
   const P = M.params;
-  const chM = 1 - Math.pow(1 - Math.min(0.99, Math.max(0, P.churn ?? 0)), 1 / 12);
+  const churn = Math.min(0.99, Math.max(0, P.churn ?? 0));
   // Las mensualidades llevan churn e inflación (igual que el motor), pero no incrementos de precio
   const infP = P.aplicarInflacion === true ? P.inflacion : 0;
-  const contFactor = (t: number) => Math.pow(1 - chM, t - (N_CARTERA - 1)) * Math.pow(1 + infP, 1 + Math.floor((t - N_CARTERA) / 12));
+  const contFactor = (t: number) => { const y = 1 + Math.floor((t - N_CARTERA) / 12); return Math.pow(1 - churn, y) * Math.pow(1 + infP, y); };
 
   // ---------- Cartera cliente por cliente (nov-25 … dic-27), con el incremento de precios aplicado ----------
   const baseDev2 = Array(12).fill(0).map((_, k) => R.clientsY2.reduce((s, c) => s + c.dev[k], 0));
@@ -108,7 +114,7 @@ export function computeFlujo(M: Model, R: Result): Flujo {
       dev[t] = t < N_Y1 ? c.dev1[t] ?? 0 : R.clientsY2[i].dev[t - N_Y1] * fDev[t - N_Y1];
       mant[t] = t < N_Y1 ? c.mant1[t] ?? 0 : R.clientsY2[i].mant[t - N_Y1] * fMant[t - N_Y1];
     }
-    // Después de dic-27 cada cliente sigue pagando su mantenimiento de dic-27, con churn e inflación;
+    // Después de dic-27 cada cliente sigue pagando su mantenimiento de dic-27; cada año, al renovar, con churn e inflación;
     // el resto del crecimiento son clientes nuevos
     for (let t = N_CARTERA; t < N_MESES; t++) mant[t] = mant[N_CARTERA - 1] * contFactor(t);
     const auto = clienteNuevoAuto(dev, mant);
@@ -228,6 +234,7 @@ export const INICIOS = Array.from({ length: N_MESES }, (_, t) => t).filter(esIni
 export interface Disposicion { t: number; trimestre: string; monto: number; acumulado: number; flujoOperativo: number; banco: number; cajaCierre: number; cajaMinima: number }
 export interface Plan {
   inicio: number; primera: number; colchon: number; colchonMeses: number;
+  cobertura: number;             // reserva adicional que entra con la primera disposición y se conserva en caja
   banco: number[];               // pago de capital del crédito (−), mes a mes
   caja: number[];                // caja mes a mes con el plan (desde el inicio)
   disp: Disposicion[];           // un renglón por periodo desde el inicio
@@ -244,7 +251,7 @@ export function pagoCapitalCredito(R: Result): number[] {
   return b;
 }
 
-export function planDisposiciones(F: Flujo, inicio = N_Y1, colchonMeses = 1, primera = inicio): Plan {
+export function planDisposiciones(F: Flujo, inicio = N_Y1, colchonMeses = 1, primera = inicio, cobertura = 0): Plan {
   // El flujo de caja real ya descuenta el pago de capital del crédito; no hay desembolso nuevo
   const banco = F.det.capitalCredito.map(v => -v);
   const neto = F.ciclo.neto;
@@ -267,7 +274,8 @@ export function planDisposiciones(F: Flujo, inicio = N_Y1, colchonMeses = 1, pri
     cortes.push(t);
     const fin = Math.min(N_MESES, t + 3);
     let x = c, minSin = Infinity; for (let k = t; k < fin; k++) { x += neto[k]; minSin = Math.min(minSin, x); }
-    const falta = Math.max(0, colchon - minSin);
+    // La cobertura se suma una sola vez (primera disposición) y se mantiene como reserva: no reduce las siguientes
+    const falta = Math.max(0, colchon + cobertura - minSin);
     const monto = falta > 0.5 ? Math.ceil(falta / REDONDEO) * REDONDEO : 0;
     acumulado += monto; c += monto;
     let minCon = Infinity, op = 0, bq = 0;
@@ -275,5 +283,5 @@ export function planDisposiciones(F: Flujo, inicio = N_Y1, colchonMeses = 1, pri
     disp.push({ t, trimestre: trimestre(t), monto, acumulado, flujoOperativo: op, banco: bq, cajaCierre: c, cajaMinima: minCon });
   }
   const con = disp.filter(d => d.monto > 0.5);
-  return { inicio, primera, colchon, colchonMeses, banco, caja, disp, cortes, total: acumulado, n: con.length, mayor: Math.max(0, ...con.map(d => d.monto)), ultima: con.length ? con[con.length - 1].trimestre : '—', deficitPrevio, puente: Math.max(0, -minPre) };
+  return { inicio, primera, colchon, colchonMeses, cobertura, banco, caja, disp, cortes, total: acumulado, n: con.length, mayor: Math.max(0, ...con.map(d => d.monto)), ultima: con.length ? con[con.length - 1].trimestre : '—', deficitPrevio, puente: Math.max(0, -minPre) };
 }

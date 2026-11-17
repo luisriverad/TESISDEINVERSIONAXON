@@ -1,10 +1,21 @@
 // ===== AXON P&L Forecast — motor de cálculo (réplica del Excel) =====
 export type Tok = 'DEV_GRUPO' | 'DEV_MARCA' | 'DEV_EUPH' | 'MANT_GRUPO' | 'MANT_MEDIANA' | 'MANT_TRANS';
 export type MCell = number | 'prev' | Tok;
+/** Mantenimiento 2027 con contrato anual: después de la primera mensualidad todos los meses arrastran ese valor ('prev') */
+export function fijarMant(mant2: MCell[], carry: number): MCell[] {
+  // El primer mes con mensualidad (capturada o arrastrada de 2026) es el único editable
+  let started = false;
+  return mant2.map((c, k) => {
+    if (started) return 'prev';
+    if (c !== 'prev' ? typeof c !== 'number' || c > 0 : k === 0 && carry > 0) started = true;
+    return c;
+  });
+}
 export type GCell = number | { t: 'C' | 'prev'; k: number } | { t: 'hc' };
 export interface Client { name: string; dev1: number[]; mant1: number[]; dev2: MCell[]; mant2: MCell[]; /** Necesidad de capital: forzar cliente nuevo (aplica ciclo comercial) o existente */ nuevo?: boolean }
-export interface Line { name: string; base: number; y: GCell[] }
-export interface Role { name: string; sal: number; hc: number[]; y: GCell[]; /** true: su nómina es costo directo (no gasto administrativo) */ directo?: boolean }
+export interface Line { name: string; base: number; y: GCell[]; /** Monto mensual 2027 por semestre (ene–jun / jul–dic); por omisión 50% y 100% del monto 2027 */ s1?: number; s2?: number }
+export interface Role { name: string; sal: number; hc: number[]; y: GCell[]; /** true: su nómina es costo directo (no gasto administrativo) */ directo?: boolean;
+  /** Sueldo mensual 2027 por semestre (ene–jun / jul–dic); si no se captura, usa `sal` */ salS1?: number; salS2?: number }
 export interface Params {
   comision: number; isr: number; ptu: number; inflacion: number; iaPersona: number; repoEmpresa: number;
   hostEmpresa: number; platBase: number; platPersona: number; devGrupo: number; devMarca: number; devEuph: number;
@@ -49,7 +60,7 @@ export interface Model {
   /** Migraciones de datos guardados que ya se aplicaron */
   migr?: Record<string, boolean>;
   /** Plan de disposiciones trimestrales del capital nuevo: mes de inicio (índice desde nov-25) y colchón de caja en meses */
-  plan?: { inicio: number; colchonMeses: number; primera?: number };
+  plan?: { inicio: number; colchonMeses: number; primera?: number; cobertura?: number };
 }
 export interface Etapa { etapa: string; dias: number }
 
@@ -128,7 +139,8 @@ export interface Result {
   /** Pérdidas fiscales: saldo por amortizar al cierre de cada año y pérdida aplicada en el año */
   fiscal: { saldo: number[]; aplicada: number[] };
   capexPlan: { cash: number[]; da: number[]; inversionAnual: number[]; daAnual: number[]; equiposNuevos: number[] };
-  gastos: { opex: number[][]; opexTot: number[]; admin: number[][]; adminTot: number[]; dirTot: number[]; hcTot: number[]; mkt: number[][]; mktTot: number[] };
+  gastos: { opex: number[][]; opexTot: number[]; admin: number[][]; adminTot: number[]; dirTot: number[]; hcTot: number[]; mkt: number[][]; mktTot: number[];
+    /** 2027 por semestre: costo mensual por puesto [S1, S2] y totales [S1, S2] */ admin27: number[][]; admin27Tot: number[]; dir27Tot: number[]; mkt27: number[][]; mkt27Tot: number[] };
   m1: Series; m2: Series; annual: Series; acum1: number[]; acum2: number[]; acumY: number[];
   cred: Credit; clientsY2: { dev: number[]; mant: number[] }[];
   scen: { vol: number[]; precio: number[]; factor: number[]; label: string };
@@ -153,8 +165,22 @@ export function compute(M: Model): Result {
   const adminTot = [0, 1, 2, 3, 4].map(i => sum(admin.filter((_, j) => !M.admin[j].directo).map(r => r[i])));
   const dirTot = [0, 1, 2, 3, 4].map(i => sum(admin.filter((_, j) => M.admin[j].directo).map(r => r[i])));
   const hcTot = [0, 1, 2, 3, 4].map(i => sum(M.admin.map(r => r.hc[i])));
+  // 2027 por semestre: cada puesto puede tener un sueldo distinto en ene–jun y jul–dic (mueve P&L mensual y caja)
+  const admin27 = M.admin.map((r, j) => {
+    const c = r.y[1];
+    if (typeof c === 'number' || c.t !== 'hc') return [admin[j][1], admin[j][1]];
+    return [r.salS1 ?? r.sal, r.salS2 ?? r.sal].map(sl => r.hc[1] * sl * (1 + carga));
+  });
+  const admin27Tot = [0, 1].map(h => sum(admin27.filter((_, j) => !M.admin[j].directo).map(x => x[h])));
+  const dir27Tot = [0, 1].map(h => sum(admin27.filter((_, j) => M.admin[j].directo).map(x => x[h])));
+  // Costo mensual 2027 = promedio de los dos semestres
+  adminTot[1] = (admin27Tot[0] + admin27Tot[1]) / 2; dirTot[1] = (dir27Tot[0] + dir27Tot[1]) / 2;
+  admin.forEach((row, j) => { row[1] = (admin27[j][0] + admin27[j][1]) / 2; });
   const mkt = M.mkt.map(l => resolveG(l.y, l.base));
   const mktTot = [0, 1, 2, 3, 4].map(i => sum(mkt.map(r => r[i])));
+  // Marketing 2027 por semestre: cada concepto con su monto mensual de ene–jun y de jul–dic
+  const mkt27 = M.mkt.map((l, j) => [l.s1 ?? mkt[j][1] / 2, l.s2 ?? mkt[j][1]]);
+  const mkt27Tot = [0, 1].map(h => sum(mkt27.map(x => x[h])));
 
   // ---------- Escenario ----------
   const meta = V.escenario === 2;
@@ -198,18 +224,14 @@ export function compute(M: Model): Result {
   S1.un = S1.uai.map((v, i) => v - S1.isr[i]);
 
   // ---------- Año 2 (mensual) ----------
-  // Churn: cada mes de 2027 el mantenimiento de cada cliente sobrevive con (1 − churn mensual), desde que arranca o desde ene-27
-  const churn = Math.min(0.99, Math.max(0, P.churn ?? 0)), chM = 1 - Math.pow(1 - churn, 1 / 12);
-  const clientsY2 = M.clients.map(c => {
-    const mant = resolveRow(c.mant2, c.mant1[n1 - 1], P);
-    const ini = mant.findIndex(v => v > 0);
-    const surv = (j: number) => (chM && ini >= 0 ? Math.pow(1 - chM, Math.max(0, j - ini + (ini === 0 && c.mant1[n1 - 1] > 0 ? 1 : 0))) : 1);
-    return {
-      dev: resolveRow(c.dev2, c.dev1[n1 - 1], P),
-      mant: mant.map((v, j) => v * surv(j)),
-      survDic: surv(11), // probabilidad de que el cliente siga activo al cierre de 2027
-    };
-  });
+  // Churn: el contrato de mantenimiento es anual, así que la mensualidad de cada cliente se mantiene igual
+  // todos los meses de 2027; la pérdida de clientes se aplica al renovar (cada año, desde 2028)
+  const churn = Math.min(0.99, Math.max(0, P.churn ?? 0));
+  const clientsY2 = M.clients.map(c => ({
+    dev: resolveRow(c.dev2, c.dev1[n1 - 1], P),
+    mant: resolveRow(c.mant2, c.mant1[n1 - 1], P),
+    survDic: 1, // en 2027 no hay renovaciones: todos los clientes con mantenimiento siguen activos al cierre
+  }));
   const r12 = Array(12).fill(0).map((_, i) => i);
   const m2: Partial<Series> = {};
   // Incremento de precios: multiplicador por mes de 2027 y proporción del año afectada en 2028–2030
@@ -230,10 +252,10 @@ export function compute(M: Model): Result {
   m2.host = m2.empresas.map(e => P.hostEmpresa * e);
   m2.plat = r12.map(() => P.platBase + P.platPersona * hcTot[1]);
   m2.comis = m2.dev.map(d => d * P.comision);
-  m2.personal = r12.map(i => dirTot[1] * sMesY2(i));
+  m2.personal = r12.map(i => dir27Tot[i < 6 ? 0 : 1] * sMesY2(i));
   m2.go = r12.map(() => opexTot[1]);
-  m2.ga = r12.map(i => adminTot[1] * sMesY2(i));
-  m2.mkt = r12.map(i => (i < 6 ? mktTot[1] / 2 : mktTot[1]));
+  m2.ga = r12.map(i => admin27Tot[i < 6 ? 0 : 1] * sMesY2(i));
+  m2.mkt = r12.map(i => mkt27Tot[i < 6 ? 0 : 1]);
   m2.capex = r12.map(() => 0);
   m2.otrosg = r12.map(() => P.otrosGastosY2);
   m2.da = r12.map(i => cxDa[14 + i]);
@@ -367,7 +389,7 @@ export function compute(M: Model): Result {
   return {
     ptu, fiscal: { saldo: perdidas, aplicada: perdidaUsada },
     capexPlan: { cash: cxCash, da: cxDa, inversionAnual: cxAnual, daAnual: anualDe(cxDa), equiposNuevos: [0, 1, 2, 3, 4].map(y => (y && M.capex?.equipos.porPersona ? Math.max(0, hcTot[y] - hcTot[y - 1]) : 0)) },
-    gastos: { opex, opexTot, admin, adminTot, dirTot, hcTot, mkt, mktTot },
+    gastos: { opex, opexTot, admin, adminTot, dirTot, hcTot, mkt, mktTot, admin27, admin27Tot, dir27Tot, mkt27, mkt27Tot },
     m1: S1, m2: S2, annual: SA, acum1, acum2, acumY, cred, clientsY2,
     scen: { vol, precio, factor, label },
     v: {

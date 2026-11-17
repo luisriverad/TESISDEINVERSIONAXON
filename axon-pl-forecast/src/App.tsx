@@ -1,10 +1,10 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { compute, type Model, type Result, type MCell, type GCell, type Series, type PLKey } from './lib/engine';
+import { compute, fijarMant, type Model, type Result, type MCell, type GCell, type Series, type PLKey } from './lib/engine';
 import DATA from './data/model.json';
 import LOGO from './assets/axon-logo.png';
 import MARK from './assets/axon-mark.png';
 import AMERICAS from './data/americas.json';
-import { computeFlujo, planDisposiciones, mesCorto, REDONDEO, N_MESES, type Flujo, type Vista, type Plan } from './lib/flujo';
+import { computeFlujo, cicloConDso, planDisposiciones, mesCorto, REDONDEO, N_MESES, type Flujo, type Vista, type Plan } from './lib/flujo';
 import { geoArea, geoAzimuthalEqualArea, geoPath } from 'd3-geo';
 
 // ===================== Marca AXON =====================
@@ -335,14 +335,7 @@ function Resumen({ R, M }: { R: Result; M: Model }) {
   const tir = irr(A.un), vpn = npv(R.v.wacc, A.un), pb = payback(R.acumY);
   const pts: { x: number; y: number; label: string; dashed?: boolean }[] = series.map((y, i) => ({ x: i, y, label: months[i] }));
   [2, 3, 4].forEach((y, k) => pts.push({ x: 25 + 12 * (k + 1), y: R.acumY[y], label: `DIC ${YEARS_S[y].slice(2)}`, dashed: true }));
-  const kpis: FineKpiDef[] = [
-    { label: 'Ventas totales', sub: 'Año 1 – Año 5', value: short(ventasTot), note: `${short(A.venta[0])} → ${short(A.venta[4])}` },
-    { label: 'TCAC', sub: 'Año 1 – Año 5', value: pct(cagr15), note: `Ventas ${YEARS_S[0]}–${YEARS_S[4]} (2026 = 14 meses)`, tone: 'pos' },
-    { label: 'TIR', value: pct(tir), note: `vs. WACC ${pct(R.v.wacc)} · sobre utilidad neta`, tone: tir >= R.v.wacc ? 'pos' : 'neg' },
-    { label: 'VPN', value: short(vpn), note: 'Utilidad neta años 1–5 al WACC', tone: vpn >= 0 ? 'pos' : 'neg' },
-    { label: 'Payback', value: isFinite(pb) ? pb.toFixed(1) : '—', unit: isFinite(pb) ? 'años' : undefined, note: `Pérdida acumulada máx. (P&L) ${short(minAcum)} · equilibrio ${beLabel}` },
-    { label: 'Valuación', sub: 'DFC', value: short(R.v.equity), note: 'Valor del capital' },
-  ];
+  const kpis = resumenKpis(M, R);
   return (
     <div style={{ display: 'grid', gap: 20 }}>
       <FineKpis items={kpis} />
@@ -504,7 +497,10 @@ function Cartera({ M, R, set }: { M: Model; R: Result; set: (f: (m: Model) => vo
                 <td style={{ ...tdC, color: C.muted, borderBottom: j ? `1px solid ${C.line}` : tdC.borderBottom }}>{money(s(kind === 'dev' ? c.dev1 : c.mant1))}</td>
                 {(kind === 'dev' ? c.dev2 : c.mant2).map((cell, k) => (
                   <td key={k} style={{ ...tdC, padding: '4px 4px', borderBottom: j ? `1px solid ${C.line}` : tdC.borderBottom }}>
-                    <CellM cell={cell} value={y2[kind][k]} onSet={v => set(m => { (kind === 'dev' ? m.clients[i].dev2 : m.clients[i].mant2)[k] = v; })} />
+                    {/* Mantenimiento: solo se captura la primera mensualidad; después queda fija (contrato anual) */}
+                    {kind === 'mant' && y2.mant.slice(0, k).some(v => v > 0)
+                      ? <div title="Mensualidad fija: se captura solo en el primer mes del contrato" style={{ width: 84, textAlign: 'right', padding: '4px 7px', font: `300 12.5px ${FONT}`, fontVariantNumeric: 'tabular-nums', color: y2.mant[k] ? C.ink2 : C.faint }}>{y2.mant[k] ? money(y2.mant[k]) : '—'}</div>
+                      : <CellM cell={cell} value={y2[kind][k]} onSet={v => set(m => { const c2 = m.clients[i]; if (kind === 'dev') c2.dev2[k] = v; else { c2.mant2[k] = v; c2.mant2 = fijarMant(c2.mant2, c2.mant1[c2.mant1.length - 1] ?? 0); } })} />}
                   </td>
                 ))}
                 <td style={{ ...tdC, fontWeight: 650, color: C.ink, background: C.tint2, borderBottom: j ? `1px solid ${C.line}` : tdC.borderBottom }}>{money(s(y2[kind]))}</td>
@@ -581,21 +577,24 @@ function GCellView({ cell, value, onSet, base }: { cell: GCell; value: number; o
   );
 }
 
-function LineTable({ title, sub, lines, vals, tot, onBase, onCell, onName }: { title: string; sub: string; lines: { name: string; base: number; y: GCell[] }[]; vals: number[][]; tot: number[]; onBase: (i: number, v: number) => void; onCell: (i: number, k: number, c: GCell) => void; onName: (i: number, v: string) => void }) {
+function LineTable({ title, sub, lines, vals, tot, onBase, onCell, onName, sem }: { title: string; sub: string; lines: { name: string; base: number; y: GCell[] }[]; vals: number[][]; tot: number[]; onBase: (i: number, v: number) => void; onCell: (i: number, k: number, c: GCell) => void; onName: (i: number, v: string) => void;
+  /** Captura de 2027 por semestre (S1 ene–jun, S2 jul–dic) */ sem?: { vals: number[][]; tot: number[]; onSet: (i: number, h: 0 | 1, v: number) => void } }) {
   return (
     <Card title={title} sub={sub} pad={false}>
       <ScrollX>
         <table style={{ borderCollapse: 'separate', borderSpacing: 0, width: '100%' }}>
-          <thead><tr><th style={{ ...th, ...stickyL, background: C.surface }}>Concepto</th><th style={th}>Base mensual</th>{YEARS_S.map(y => <th key={y} style={th}>{y}</th>)}</tr></thead>
+          <thead><tr><th style={{ ...th, ...stickyL, background: C.surface }}>Concepto</th><th style={th}>Base mensual</th>{sem && <><th style={th} title="Monto mensual de enero a junio 2027">2027 S1 ene–jun</th><th style={th} title="Monto mensual de julio a diciembre 2027">2027 S2 jul–dic</th></>}{YEARS_S.map(y => <th key={y} style={th}>{sem && y === '2027' ? '2027 base' : y}</th>)}</tr></thead>
           <tbody>
             {lines.map((l, i) => (
               <tr key={i}>
                 <td style={{ ...tdBase, ...stickyL }}><input value={l.name} onChange={e => onName(i, e.target.value)} placeholder="Concepto nuevo" aria-label="Nombre del concepto (editable)" style={{ border: `1px solid ${C.yellowLine}`, borderRadius: 6, padding: '4px 8px', outline: 'none', font: `400 13px ${FONT}`, color: C.ink, background: C.yellowSoft, width: nameW(lines.map(x => x.name)) }} /></td>
                 <td style={tdBase}><NumInput value={l.base} onChange={v => onBase(i, v)} width={92} /></td>
+                {sem && ([0, 1] as const).map(h => <td key={'s' + h} style={tdBase}><NumInput value={sem.vals[i][h]} onChange={v => sem.onSet(i, h, v)} width={92} /></td>)}
                 {l.y.map((c, k) => <td key={k} style={tdBase}><GCellView cell={c} value={vals[i][k]} base="base" onSet={nc => onCell(i, k, nc)} /></td>)}
               </tr>
             ))}
             <tr><td style={{ ...tdBase, ...stickyL, fontWeight: 650, color: C.ink, background: C.tint }}>Total mensual</td><td style={{ ...tdBase, background: C.tint }} />
+              {sem && sem.tot.map((v, h) => <td key={'st' + h} style={{ ...tdBase, fontWeight: 650, color: C.ink, background: C.tint }}>{money(v)}</td>)}
               {tot.map((v, k) => <td key={k} style={{ ...tdBase, fontWeight: 650, color: C.ink, background: C.tint }}>{money(v)}</td>)}</tr>
           </tbody>
         </table>
@@ -636,24 +635,29 @@ function PlantillaTable({ M, R, set, directo, title, sub, eyebrow }: { M: Model;
       <ScrollX>
         <table style={{ borderCollapse: 'separate', borderSpacing: 0, width: '100%' }}>
           <thead>
-            <tr><th style={{ ...th, ...stickyL, background: C.surface }} /><th style={th} /><th colSpan={5} style={{ ...th, textAlign: 'center', color: C.ink }}>Plantilla (personas)</th><th colSpan={5} style={{ ...th, textAlign: 'center', color: C.ink }}>Costo mensual</th></tr>
-            <tr><th style={{ ...th, ...stickyL, background: C.surface }}>Puesto</th><th style={th}>Sueldo mensual</th>{YEARS_S.map(y => <th key={'h' + y} style={th}>{y}</th>)}{YEARS_S.map(y => <th key={'c' + y} style={th}>{y}</th>)}</tr>
+            <tr><th style={{ ...th, ...stickyL, background: C.surface }} /><th style={th} /><th colSpan={2} style={{ ...th, textAlign: 'center', color: C.ink }}>Sueldo 2027</th><th colSpan={5} style={{ ...th, textAlign: 'center', color: C.ink }}>Plantilla (personas)</th><th colSpan={5} style={{ ...th, textAlign: 'center', color: C.ink }}>Costo mensual</th></tr>
+            <tr><th style={{ ...th, ...stickyL, background: C.surface }}>Puesto</th><th style={th}>Sueldo mensual</th><th style={th} title="Enero a junio 2027">S1 ene–jun</th><th style={th} title="Julio a diciembre 2027">S2 jul–dic</th>{YEARS_S.map(y => <th key={'h' + y} style={th}>{y}</th>)}{YEARS_S.map(y => <th key={'c' + y} style={th}>{y}</th>)}</tr>
           </thead>
           <tbody>
             {M.admin.map((r, i) => !!r.directo !== directo ? null : (
               <tr key={i}>
                 <td style={{ ...tdBase, ...stickyL }}><input value={r.name} onChange={e => set(m => { m.admin[i].name = e.target.value; })} style={{ border: 0, outline: 'none', font: `400 13px ${FONT}`, color: C.ink, background: 'transparent', width: nameW(M.admin.map(x => x.name), 14) }} /></td>
                 <td style={tdBase}><NumInput value={r.sal} onChange={v => set(m => { m.admin[i].sal = v; })} width={88} /></td>
+                {(['salS1', 'salS2'] as const).map(k => (
+                  <td key={k} style={tdBase}><NumInput value={r[k] ?? r.sal} onChange={v => set(m => { m.admin[i][k] = v; })} width={88} /></td>
+                ))}
                 {r.hc.map((h, k) => <td key={'h' + k} style={tdBase}><NumInput kind="num" value={h} onChange={v => set(m => { m.admin[i].hc[k] = v; })} width={46} /></td>)}
                 {r.y.map((c, k) => <td key={'c' + k} style={tdBase}>{k === 0
                   ? <div title="Referencia; el P&L 2026 usa el presupuesto capturado" style={{ color: C.faint }}>{money(G.admin[i][0])}</div>
-                  : <GCellView cell={c} value={G.admin[i][k]} base="sueldo" onSet={nc => set(m => { m.admin[i].y[k] = nc; })} />}</td>)}
+                  : k === 1 && typeof c !== 'number' && c.t === 'hc' && G.admin27[i][0] !== G.admin27[i][1]
+                    ? <div title="Costo mensual por semestre (S1 ene–jun / S2 jul–dic)"><div style={{ color: C.ink }}>{money(G.admin27[i][0])} <span style={{ color: C.faint }}>/</span> {money(G.admin27[i][1])}</div><div style={{ font: `300 10.5px ${FONT}`, color: C.faint }}>S1 / S2 + carga</div></div>
+                    : <GCellView cell={c} value={G.admin[i][k]} base="sueldo" onSet={nc => set(m => { m.admin[i].y[k] = nc; })} />}</td>)}
               </tr>
             ))}
             <tr>
-              <td style={{ ...tdBase, ...stickyL, fontWeight: 650, color: C.ink, background: C.tint }}>Total</td><td style={{ ...tdBase, background: C.tint }} />
+              <td style={{ ...tdBase, ...stickyL, fontWeight: 650, color: C.ink, background: C.tint }}>Total</td><td style={{ ...tdBase, background: C.tint }} /><td style={{ ...tdBase, background: C.tint }} /><td style={{ ...tdBase, background: C.tint }} />
               {hcTot.map((v, k) => <td key={'th' + k} style={{ ...tdBase, fontWeight: 650, color: C.ink, background: C.tint }}>{v}</td>)}
-              {costTot.map((v, k) => <td key={'tc' + k} style={{ ...tdBase, fontWeight: 650, color: C.ink, background: C.tint }}>{money(v)}</td>)}
+              {costTot.map((v, k) => { const h = directo ? G.dir27Tot : G.admin27Tot; return <td key={'tc' + k} style={{ ...tdBase, fontWeight: 650, color: C.ink, background: C.tint }}>{k === 1 && Math.abs(h[0] - h[1]) > 0.5 ? <>{money(h[0])} <span style={{ color: C.faint, fontWeight: 300 }}>/</span> {money(h[1])}</> : money(v)}</td>; })}
             </tr>
           </tbody>
         </table>
@@ -677,9 +681,10 @@ function Gastos({ M, R, set }: { M: Model; R: Result; set: (f: (m: Model) => voi
         onBase={(i, v) => set(m => { m.opex[i].base = v; })} onCell={(i, k, c) => set(m => { m.opex[i].y[k] = c; })} onName={(i, v) => set(m => { m.opex[i].name = v; })} />
 
       <PlantillaTable M={M} R={R} set={set} directo={false} title="Gasto administrativo · plantilla"
-        sub="Personas por año y costo mensual. De 2027 a 2030 el costo es plantilla × sueldo mensual (+ carga social); 2026 es referencia, el P&L usa el presupuesto capturado." />
+        sub="Personas por año y costo mensual. De 2027 a 2030 el costo es plantilla × sueldo mensual (+ carga social); en 2027 el sueldo se captura por semestre (S1 ene–jun, S2 jul–dic) y mueve el P&L mensual y la caja. 2026 es referencia, el P&L usa el presupuesto capturado." />
 
-      <LineTable title="Gasto de marketing y ventas" sub="2027 arranca al 50% en el primer semestre y al 100% en el segundo." lines={M.mkt} vals={G.mkt} tot={G.mktTot}
+      <LineTable title="Gasto de marketing y ventas" sub="En 2027 el monto mensual se captura por semestre (S1 ene–jun, S2 jul–dic) y mueve el P&L mensual y la caja; por omisión S1 = 50% y S2 = 100% del monto 2027. De 2028 en adelante crece sobre la base 2027." lines={M.mkt} vals={G.mkt} tot={G.mktTot}
+        sem={{ vals: G.mkt27, tot: G.mkt27Tot, onSet: (i, h, v) => set(m => { m.mkt[i][h ? 's2' : 's1'] = v; }) }}
         onBase={(i, v) => set(m => { m.mkt[i].base = v; })} onCell={(i, k, c) => set(m => { m.mkt[i].y[k] = c; })} onName={(i, v) => set(m => { m.mkt[i].name = v; })} />
     </div>
   );
@@ -863,11 +868,12 @@ function PlanChart({ P, F }: { P: Plan; F: Flujo }) {
   );
 }
 
-const PRIMERA_DEF = 19; // jun-27
-const planDe = (M: Model, F: Flujo) => planDisposiciones(F, 14, M.plan?.colchonMeses ?? 1, M.plan?.primera ?? PRIMERA_DEF);
+const COBERTURA_DEF = 1000000; // reserva adicional de cobertura en el capital nuevo
+const PRIMERA_DEF = 20; // jul-27 (inicio del 3er trimestre)
+const planDe = (M: Model, F: Flujo) => planDisposiciones(F, 14, M.plan?.colchonMeses ?? 1, M.plan?.primera ?? PRIMERA_DEF, M.plan?.cobertura ?? COBERTURA_DEF);
 function PlanDisposiciones({ M, R, F, set }: { M: Model; R: Result; F: Flujo; set: (f: (m: Model) => void) => void }) {
   const P = useMemo(() => planDe(M, F), [M, F]);
-  const upd = (k: 'primera' | 'colchonMeses', v: number) => set(m => { m.plan = { ...(m.plan ?? { inicio: 14, colchonMeses: 1, primera: PRIMERA_DEF }), inicio: 14, [k]: v }; });
+  const upd = (k: 'primera' | 'colchonMeses' | 'cobertura', v: number) => set(m => { m.plan = { ...(m.plan ?? { inicio: 14, colchonMeses: 1, primera: PRIMERA_DEF }), inicio: 14, [k]: v }; });
   const con = P.disp.filter(d => d.monto > 0.5);
   const lab = { font: `650 10px ${FONT}`, textTransform: 'uppercase' as const, letterSpacing: '.16em', color: C.ink };
   return (
@@ -884,6 +890,10 @@ function PlanDisposiciones({ M, R, F, set }: { M: Model; R: Result; F: Flujo; se
           <span style={lab}>Colchón de caja</span>
           <Segmented value={P.colchonMeses} onChange={v => upd('colchonMeses', v)} options={[0, 1, 2, 3].map(v => ({ v, l: v ? `${v} ${v === 1 ? 'mes' : 'meses'}` : 'Sin colchón' }))} />
         </span>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 10 }} title="Reserva adicional que entra con la primera disposición y se conserva en caja; no afecta la valuación">
+          <span style={lab}>Cobertura adicional</span>
+          <NumInput value={P.cobertura} onChange={v => upd('cobertura', Math.max(0, v))} width={110} />
+        </label>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', borderTop: `1px solid ${C.line2}`, borderBottom: `1px solid ${C.line2}`, marginBottom: 18 }}>
@@ -935,9 +945,77 @@ function PlanDisposiciones({ M, R, F, set }: { M: Model; R: Result; F: Flujo; se
   );
 }
 
+// Composición del ingreso (desarrollo inicial vs. mantenimiento) contra la necesidad de capital
+function MezclaIngreso({ M, R, F, PL }: { M: Model; R: Result; F: Flujo; PL: Plan }) {
+  const A = R.annual, P = M.params;
+  const [sel, setSel] = useState<number>(-1); // -1 = 2026–2030
+  const sum = (x: number[]) => x.reduce((a, b) => a + b, 0);
+  const dev = sel < 0 ? sum(A.dev) : A.dev[sel], mant = sel < 0 ? sum(A.mant) : A.mant[sel];
+  const base = dev + mant || 1;
+  const anios = [{ l: '2026', a: 0, b: 14 }, { l: '2027', a: 14, b: 26 }, { l: '2028', a: 26, b: 38 }, { l: '2029', a: 38, b: 50 }, { l: '2030', a: 50, b: 62 }];
+  const sl = (x: number[], a: number, b: number) => sum(x.slice(a, b));
+  const dispMes = Array.from({ length: N_MESES }, () => 0); PL.disp.forEach(d => { if (d.monto > 0.5) dispMes[d.t] += d.monto; });
+  const rows = anios.map(y => {
+    const cDev = sl(F.det.cobroDev, y.a, y.b), cMant = sl(F.det.cobroMant, y.a, y.b);
+    const egr = sl(F.det.pagos, y.a, y.b) + sl(F.det.capitalCredito, y.a, y.b) + sl(F.det.capex, y.a, y.b);
+    return { ...y, cDev, cMant, egr, brecha: cDev + cMant - egr, cap: sl(dispMes, y.a, y.b), cob: egr ? cMant / egr : 0 };
+  });
+  const maxCob = rows.slice(1).reduce((m, r) => (r.cob > m.cob ? r : m), rows[1]);
+  const card = (dark: boolean, title: string, v: number, items: [string, string][]) => (
+    <div style={{ background: dark ? C.ink : C.tint2, color: dark ? '#fff' : C.ink, padding: '24px 26px', border: `1px solid ${dark ? C.ink : C.line}` }}>
+      <div style={{ font: `500 11px ui-monospace, SFMono-Regular, Menlo, monospace`, letterSpacing: '.08em', textTransform: 'uppercase', color: dark ? C.yellow : C.gold }}>{title}</div>
+      <div style={{ font: `200 64px/1.05 ${FONT}`, letterSpacing: '-0.04em', margin: '8px 0 14px' }}>{pct(v)}</div>
+      {/* Barra delgada: se mueve con el % del periodo elegido */}
+      <div style={{ height: 4, background: dark ? 'rgba(255,255,255,.14)' : C.line, marginBottom: 20, overflow: 'hidden' }}>
+        <div style={{ height: '100%', width: `${Math.max(0, Math.min(1, v)) * 100}%`, background: dark ? C.yellow : C.gold, transition: 'width .6s cubic-bezier(.2,.8,.2,1)' }} />
+      </div>
+      <div style={{ font: `500 9.5px ui-monospace, SFMono-Regular, Menlo, monospace`, letterSpacing: '.08em', textTransform: 'uppercase', color: dark ? C.yellow : C.gold, paddingBottom: 8, borderBottom: `1px solid ${dark ? 'rgba(255,255,255,.12)' : C.line}` }}>Supuestos</div>
+      {items.map(([l, x]) => (
+        <div key={l} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', padding: '10px 0', borderBottom: `1px solid ${dark ? 'rgba(255,255,255,.08)' : C.line}` }}>
+          <span style={{ font: `300 13px ${FONT}`, color: dark ? 'rgba(255,255,255,.8)' : C.ink2 }}>{l}</span>
+          <span style={{ font: `200 22px ${FONT}`, fontVariantNumeric: 'tabular-nums' }}>{x}</span>
+        </div>
+      ))}
+    </div>
+  );
+  const nPagos = Math.max(1, Math.round(P.exhibiciones || 1));
+  const td = (v: React.ReactNode, extra?: React.CSSProperties) => <td style={{ padding: '9px 12px', textAlign: 'right', borderBottom: `1px solid ${C.line2}`, ...extra }}>{v}</td>;
+  const mx = (v: number) => (Math.abs(v) < 0.5 ? '—' : v < 0 ? `(${money(-v)})` : money(v));
+  return (
+    <Card eyebrow="Composición del ingreso" title="De dónde viene el dinero vs. cuánto capital se necesita"
+      right={<Segmented value={sel} onChange={setSel} options={[{ v: -1, l: '2026–2030' }, ...YEARS_S.map((y, i) => ({ v: i, l: y }))]} />}>
+      <div className="axon-two" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+        {card(false, 'Desarrollo inicial', dev / base, [['Empresa Mediana', '$' + money(P.devGrupo)], ['Empresa Transnacional', '$' + money(P.devMarca)], ['Pagos', `${nPagos} de ${Math.round(100 / nPagos)}%`]])}
+        {card(true, 'Mantenimiento recurrente', mant / base, [['Mensual Empresa Mediana', '$' + money(P.mantMediana ?? 0)], ['Mensual Empresa Transnacional', '$' + money(P.mantTrans ?? 0)]])}
+      </div>
+      <div style={{ font: `300 11px ${FONT}`, color: C.faint, marginTop: 8 }}>% sobre ingreso por desarrollo + mantenimiento del P&L ({sel < 0 ? '2026–2030' : YEARS_S[sel]}).</div>
+
+      <div style={{ marginTop: 22, overflowX: 'auto' }}>
+        <table style={{ borderCollapse: 'collapse', width: '100%', font: `300 12.5px ${FONT}`, fontVariantNumeric: 'tabular-nums' }}>
+          <thead><tr>{['Caja por año', ...rows.map(r => r.l)].map((h, i) => (
+            <th key={h} style={{ textAlign: i ? 'right' : 'left', padding: '7px 12px', borderBottom: `1px solid ${C.ink}`, font: `650 10px ${FONT}`, letterSpacing: '.14em', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{h}</th>))}</tr></thead>
+          <tbody>
+            <tr><td style={{ padding: '9px 12px', borderBottom: `1px solid ${C.line2}` }}>Cobranza desarrollo inicial</td>{rows.map(r => td(mx(r.cDev)))}</tr>
+            <tr><td style={{ padding: '9px 12px', borderBottom: `1px solid ${C.line2}` }}>Cobranza mantenimiento recurrente</td>{rows.map(r => td(mx(r.cMant)))}</tr>
+            <tr><td style={{ padding: '9px 12px', borderBottom: `1px solid ${C.line2}` }}>Egresos totales (nómina, terceros, impuestos, crédito y CAPEX)</td>{rows.map(r => td(mx(-r.egr), { color: C.neg }))}</tr>
+            <tr><td style={{ padding: '9px 12px', borderBottom: `1px solid ${C.line2}`, fontWeight: 600 }}>Brecha de caja del año</td>{rows.map(r => td(mx(r.brecha), { fontWeight: 600, color: r.brecha < 0 ? C.neg : C.ink }))}</tr>
+            <tr style={{ background: C.yellowSoft }}><td style={{ padding: '9px 12px', borderBottom: `1px solid ${C.line2}`, fontWeight: 600 }}>Capital nuevo dispuesto (plan)</td>{rows.map(r => td(r.cap > 0.5 ? money(r.cap) : '—', { fontWeight: 600 }))}</tr>
+            <tr><td style={{ padding: '9px 12px', borderBottom: `1px solid ${C.line2}`, color: C.muted, fontStyle: 'italic' }}>El mantenimiento cubre de los egresos</td>{rows.map(r => td(pct(r.cob, 0), { color: C.muted, fontStyle: 'italic' }))}</tr>
+          </tbody>
+        </table>
+      </div>
+      <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${C.line2}`, display: 'grid', gap: 6, font: `300 12px/1.5 ${FONT}`, color: C.ink2 }}>
+        <div>• El ingreso recurrente cubre como máximo <strong style={{ fontWeight: 600 }}>{pct(maxCob.cob, 0)}</strong> de los egresos ({maxCob.l}): la operación depende de vender y cobrar nuevos desarrollos.</div>
+        <div>• El desarrollo inicial es <strong style={{ fontWeight: 600 }}>{pct(sum(A.dev) / (sum(A.dev) + sum(A.mant) || 1))}</strong> del ingreso 2026–2030, pero se cobra en {nPagos} {nPagos === 1 ? 'pago' : 'pagos'} con el retraso del ciclo comercial: esa espera es la que financia el capital nuevo de <strong style={{ fontWeight: 600, color: C.neg }}>{short(PL.total)}</strong>.</div>
+      </div>
+    </Card>
+  );
+}
+
 function FlujoTab({ M, R, set }: { M: Model; R: Result; set: (f: (m: Model) => void) => void }) {
   const mvs = (x: number) => `+${x} ${x === 1 ? 'mes' : 'meses'} vs. P&L`;
   const F = useMemo(() => computeFlujo(M, R), [M, R]);
+  const PL = useMemo(() => planDe(M, F), [M, F]);
   const [vistaT, setVistaT] = useState<'anual' | 'mensual'>('anual');
   const h = F.h;
   const anios = [{ l: '2026', s: 'nov-25 a dic-26', a: 0, b: 14 }, { l: '2027', a: 14, b: 26 }, { l: '2028', a: 26, b: 38 }, { l: '2029', a: 38, b: 50 }, { l: '2030', a: 50, b: 62 }];
@@ -968,10 +1046,11 @@ function FlujoTab({ M, R, set }: { M: Model; R: Result; set: (f: (m: Model) => v
     <div style={{ display: 'grid', gap: 20 }}>
       <FineKpis items={[
         { label: 'Según P&L', sub: 'Curva J contable', value: short(F.pl.necesidad), note: `Pico en ${mesCorto(F.pl.mesPico)}` },
-        { label: '+ Crédito, CAPEX y capital de trabajo', sub: `Pago de capital · CAPEX · cobro ${M.val.wc?.dso ?? 30} d · pago ${M.val.wc?.dpo ?? 30} d`, value: short(F.wc.necesidad), hl: 'Necesidad de nuevo capital', note: `+${short(F.plb.necesidad - F.pl.necesidad)} crédito y CAPEX, +${short(Math.max(0, F.wc.necesidad - F.plb.necesidad))} días de cartera y proveedores` },
+        { label: '+ Crédito, CAPEX y capital de trabajo', sub: `Pago de capital · CAPEX · cobro ${M.val.wc?.dso ?? 30} d · pago ${M.val.wc?.dpo ?? 30} d`, value: short(F.wc.necesidad), note: `+${short(F.plb.necesidad - F.pl.necesidad)} crédito y CAPEX, +${short(Math.max(0, F.wc.necesidad - F.plb.necesidad))} días de cartera y proveedores` },
         { label: '+ Ciclo comercial', sub: 'Necesidad máxima de caja', value: short(F.ciclo.necesidad), note: `Pico en ${mesCorto(F.ciclo.mesPico)} · ${F.ciclo.mesRecupera >= 0 ? `caja positiva desde ${mesCorto(F.ciclo.mesRecupera)}` : 'aún negativa a dic-30'}`, tone: 'neg' },
         { label: 'Equivale a', sub: 'Egreso mensual promedio 2027', value: F.mesesOperacion.toFixed(1), unit: 'meses', note: `${short(F.operacionMensual)} al mes de egreso operativo (sin capital del crédito ni CAPEX)` },
-        { label: 'Participación del inversionista', sub: 'Post-money', value: pct(ratio(F.wc.necesidad, R.v.equity + F.wc.necesidad), 1), hl: 'Para quien mete el capital', note: `${short(F.wc.necesidad)} sobre post-money de ${short(R.v.equity + F.wc.necesidad)} (pre-money ${short(R.v.equity)} de Valuación)` },
+        { label: 'Capital nuevo total', sub: `Plan de disposiciones desde ${mesCorto(PL.primera)}`, value: short(PL.total), hl: 'Necesidad de nuevo capital', note: `${PL.n} disposiciones trimestrales · incluye colchón de ${short(PL.colchon)}${PL.cobertura ? ` y cobertura de ${short(PL.cobertura)}` : ''}` },
+        { label: 'Participación del inversionista', sub: 'Post-money', value: pct(ratio(PL.total, R.v.equity + PL.total), 1), hl: 'Para quien mete el capital', note: `${short(PL.total)} sobre post-money de ${short(R.v.equity + PL.total)} (pre-money ${short(R.v.equity)} de Valuación)` },
       ]} />
 
       <Card title="¿Por qué pedimos capital de trabajo adicional?">
@@ -980,6 +1059,8 @@ function FlujoTab({ M, R, set }: { M: Model; R: Result; set: (f: (m: Model) => v
       </Card>
 
       <PlanDisposiciones M={M} R={R} F={F} set={set} />
+
+      <MezclaIngreso M={M} R={R} F={F} PL={PL} />
 
       <div className="axon-two" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1.25fr)', gap: 18, alignItems: 'stretch' }}>
         <Card eyebrow="De dónde sale la cifra" title="Composición de la necesidad de caja">
@@ -1128,8 +1209,25 @@ function Slider({ value, min, max, step, onChange, label }: { value: number; min
 }
 
 type IncCfg = { incK: 'precioInc' | 'sueldoInc'; desdeK: 'precioDesde' | 'sueldoDesde'; eyebrow: string; title: string; sub: string; max: number };
-const INC_PRECIO: IncCfg = { incK: 'precioInc', desdeK: 'precioDesde', eyebrow: 'Precios', title: 'Incremento de precios', sub: 'Aumento sobre el precio del desarrollo inicial a partir del mes que elijas; las mensualidades de mantenimiento no llevan este incremento (solo inflación). Se suma al aumento de precio 2028–2030 definido en Valuación.', max: 30 };
+const INC_PRECIO: IncCfg = { incK: 'precioInc', desdeK: 'precioDesde', eyebrow: 'Precios', title: 'Incremento de precios', sub: 'Aumento sobre el precio del desarrollo inicial a partir del mes que elijas; las mensualidades de mantenimiento no llevan este incremento (solo inflación). Se suma al aumento anual de precio de la tabla Crecimiento 2028–2030.', max: 30 };
 const INC_SUELDO: IncCfg = { incK: 'sueldoInc', desdeK: 'sueldoDesde', eyebrow: 'Sueldos', title: 'Incremento de sueldos', sub: 'Aumento sobre la nómina de todos los puestos (administrativos y personal directo, con su carga social) a partir del mes que elijas. Se refleja en el P&L.', max: 30 };
+
+// Crecimiento 2028–2030 (volumen y precio del desarrollo inicial): se captura en Supuestos y alimenta Valuación
+function CrecimientoCard({ M, R, set }: { M: Model; R: Result; set: (f: (m: Model) => void) => void }) {
+  const row = (k: 'volMeta' | 'precioMeta') => M.val[k].map((x, i) => <td key={i} style={tdBase}><NumInput kind="pct" width={70} value={x} onChange={nv => set(m => { m.val[k][i] = nv; })} /></td>);
+  return (
+    <Card eyebrow="Crecimiento" title="Crecimiento 2028–2030" sub="Crecimiento de volumen de clientes y aumento de precio del desarrollo inicial (adicional a la inflación). Alimenta el P&L y la Valuación." pad={false}>
+      <table style={{ borderCollapse: 'separate', borderSpacing: 0, width: '100%' }}>
+        <thead><tr><th style={{ ...th, textAlign: 'left' }}>Supuesto</th>{['2028', '2029', '2030'].map(y => <th key={y} style={th}>{y}</th>)}</tr></thead>
+        <tbody>
+          <tr><td style={{ ...tdBase, textAlign: 'left' }}>Crecimiento de volumen</td>{row('volMeta')}</tr>
+          <tr><td style={{ ...tdBase, textAlign: 'left' }}>Aumento de precio del desarrollo inicial<span style={{ display: 'block', font: `300 10.5px ${FONT}`, color: C.faint }}>No aplica a las mensualidades</span></td>{row('precioMeta')}</tr>
+          <tr><td style={{ ...tdBase, textAlign: 'left', fontWeight: 650, color: C.ink, background: C.tint }}>Ventas proyectadas</td>{[2, 3, 4].map(i => <td key={i} style={{ ...tdBase, fontWeight: 650, color: C.ink, background: C.tint }}>{short(R.annual.venta[i])}</td>)}</tr>
+        </tbody>
+      </table>
+    </Card>
+  );
+}
 
 function IncrementoCard({ M, R, set, cfg }: { M: Model; R: Result; set: (f: (m: Model) => void) => void; cfg: IncCfg }) {
   const inc = M.params[cfg.incK] ?? 0, desde = M.params[cfg.desdeK] ?? 0;
@@ -1184,14 +1282,13 @@ function IncrementoCard({ M, R, set, cfg }: { M: Model; R: Result; set: (f: (m: 
 function ChurnCard({ M, R, set }: { M: Model; R: Result; set: (f: (m: Model) => void) => void }) {
   const ch = M.params.churn ?? 0;
   const R0 = useMemo(() => compute({ ...M, params: { ...M.params, churn: 0 } }), [M]);
-  const mensual = 1 - Math.pow(1 - ch, 1 / 12);
   const dMant = sum5(R.annual.mant) - sum5(R0.annual.mant);
   const dUn = sum5(R.annual.un) - sum5(R0.annual.un);
   const dVal = R.v.equity - R0.v.equity;
   const lab = { font: `650 10px ${FONT}`, textTransform: 'uppercase' as const, letterSpacing: '.16em', color: C.ink };
   const sign = (v: number) => (Math.abs(v) < 1 ? '—' : (v > 0 ? '+' : '−') + short(Math.abs(v)));
   return (
-    <Card eyebrow="Retención" title="Pérdida de clientes (churn rate)" sub="% anual de la base de mantenimiento que se pierde a partir de 2027. Solo afecta los ingresos por mantenimiento; el desarrollo no cambia.">
+    <Card eyebrow="Retención" title="Pérdida de clientes (churn rate)" sub="% de clientes que no renuevan su contrato anual de mantenimiento. La mensualidad es fija durante el año; la pérdida se aplica en cada renovación, desde 2028. Solo afecta los ingresos por mantenimiento; el desarrollo no cambia.">
       <div className="axon-two" style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr', gap: 36, alignItems: 'start' }}>
         <div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
@@ -1202,7 +1299,7 @@ function ChurnCard({ M, R, set }: { M: Model; R: Result; set: (f: (m: Model) => 
           <div style={{ display: 'flex', justifyContent: 'space-between', font: `300 10px ${FONT}`, color: C.faint, marginTop: 6 }}>{[0, 5, 10, 15, 20, 25, 30].map(t => <span key={t}>{t}%</span>)}</div>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0, background: C.tint, border: `1px solid ${C.line2}`, borderRadius: 0 }}>
-          {[['Equivale a', ch ? `${(mensual * 100).toFixed(2)}%` : '—', 'de la base al mes'], ['Vida promedio', ch ? `${(1 / ch).toFixed(1)} años` : '∞', 'de un cliente (1 ÷ churn)']].map(([l, v, n], i) => (
+          {[['Renovación', ch ? `${((1 - ch) * 100).toFixed(0)}%` : '100%', 'de los contratos cada año'], ['Vida promedio', ch ? `${(1 / ch).toFixed(1)} años` : '∞', 'de un cliente (1 ÷ churn)']].map(([l, v, n], i) => (
             <div key={l} style={{ padding: '14px 16px', borderLeft: i ? `1px solid ${C.line2}` : undefined }}>
               <div style={lab}>{l}</div>
               <div style={{ font: `250 22px ${FONT}`, marginTop: 6 }}>{v}</div>
@@ -1317,7 +1414,7 @@ const CICLO_DEF = [{"etapa": "ANÁLISIS DE MANAGEMENT Y PROCESOS / NDA", "dias":
 const esPago = (n: string) => /^PAGO/i.test(n.trim());
 const mesMantenimiento = (total: number) => Math.floor(total / 30.5) + 1;
 function CicloCard({ M, set }: { M: Model; set: (f: (m: Model) => void) => void }) {
-  const et = M.ciclo ?? CICLO_DEF;
+  const et = cicloConDso(M.ciclo ?? CICLO_DEF, M.val.wc?.dso ?? 30);
   const total = et.reduce((s, e) => s + e.dias, 0);
   const iPago = et.findIndex(e => esPago(e.etapa));
   const diaPago = iPago >= 0 ? et.slice(0, iPago + 1).reduce((s, e) => s + e.dias, 0) : total;
@@ -1379,7 +1476,9 @@ function CicloCard({ M, set }: { M: Model; set: (f: (m: Model) => void) => void 
               <span style={{ width: 10, height: 10, borderRadius: 3, background: tono(k), border: `1px solid ${C.line}` }} />
               <input value={e.etapa} onChange={ev => upd(k, x => { x.etapa = ev.target.value; })} style={{ border: 0, outline: 'none', background: 'transparent', font: `${pago ? 600 : 300} 12.5px ${FONT}`, color: pago ? C.gold : C.ink, letterSpacing: '.02em', minWidth: 0 }} />
               <span style={{ font: `300 11.5px ${FONT}`, color: C.faint, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>día {ini} → <span style={{ color: C.ink2 }}>{acc}</span></span>
-              <span style={{ justifySelf: 'end' }}><NumInput kind="num" value={e.dias} width={64} onChange={v => upd(k, x => { x.dias = Math.max(0, Math.round(v)); })} /></span>
+              <span style={{ justifySelf: 'end' }}>{pago
+                ? <span title="Se alimenta de los días de cartera (DSO) en Capital de trabajo" style={{ display: 'inline-block', width: 64, textAlign: 'right', padding: '4px 7px', font: `400 13px ${FONT}`, fontVariantNumeric: 'tabular-nums', color: C.ink }}>{e.dias}<span style={{ display: 'block', font: `300 9.5px ${FONT}`, color: C.faint }}>= DSO</span></span>
+                : <NumInput kind="num" value={e.dias} width={64} onChange={v => upd(k, x => { x.dias = Math.max(0, Math.round(v)); })} />}</span>
             </div>
           );
         })}
@@ -1568,6 +1667,7 @@ function Supuestos({ M, R, set }: { M: Model; R: Result; set: (f: (m: Model) => 
           ))}
         </div>
       </Card>
+      <CrecimientoCard M={M} R={R} set={set} />
       <IncrementoCard M={M} R={R} set={set} cfg={INC_PRECIO} />
       <ChurnCard M={M} R={R} set={set} />
       <CargaCard M={M} R={R} set={set} />
@@ -1642,20 +1742,42 @@ function KV({ l, children, strong, note }: { l: string; children: React.ReactNod
 
 function SensTable({ title, rowLabel, rows, cols, m, base, meta, fmtRow }: { title: string; rowLabel: string; rows: number[]; cols: number[]; m: number[][]; base: number; meta: number; fmtRow: (v: number) => string }) {
   return (
-    <Card title={title} sub={`Valor del capital (MXN). Sombreado: alcanza la meta de ${short(meta)}`} pad={false}>
+    <Card title={title} sub="Valor del capital (MXN). Recuadro: escenario base" pad={false}>
       <table style={{ borderCollapse: 'separate', borderSpacing: 0, width: '100%' }}>
         <thead><tr><th style={{ ...th, textAlign: 'left' }}>{rowLabel} \ g</th>{cols.map(c => <th key={c} style={th}>{pct(c)}</th>)}</tr></thead>
         <tbody>{m.map((r, i) => (
           <tr key={i}>
             <td style={{ ...tdBase, textAlign: 'left', fontWeight: 600, color: C.ink }}>{fmtRow(rows[i])}</td>
             {r.map((v, j) => {
-              const isBase = i === base && j === 2, ok = v >= meta;
-              return <td key={j} style={{ ...tdBase, background: ok ? C.yellowSoft : C.surface, fontWeight: isBase ? 650 : 300, color: C.ink, outline: isBase ? `1px solid ${C.ink}` : undefined, outlineOffset: -2 }}>{short(v)}</td>;
+              const isBase = i === base && j === 2;
+              return <td key={j} style={{ ...tdBase, background: isBase ? C.yellowSoft : C.surface, fontWeight: isBase ? 650 : 300, color: C.ink, outline: isBase ? `1px solid ${C.ink}` : undefined, outlineOffset: -2 }}>{short(v)}</td>;
             })}
           </tr>))}</tbody>
       </table>
     </Card>
   );
+}
+
+// KPIs del resumen (se muestran en Resumen y arriba de Valuación)
+function resumenKpis(M: Model, R: Result): FineKpiDef[] {
+  const A = R.annual;
+  const minAcum = Math.min(...R.acum1, ...R.acum2, ...R.acumY);
+  const months = [...M.months1.map(m => (/\d/.test(m) ? m : `${m} 26`)), ...M.months2.map(m => `${m} 27`)];
+  const series = [...R.acum1, ...R.acum2];
+  const be = series.findIndex(v => v >= 0);
+  const beYear = R.acumY.findIndex(v => v >= 0);
+  const beLabel = be >= 0 ? months[be] : beYear >= 0 ? `Año ${beYear + 1} (${YEARS_S[beYear]})` : 'Fuera del horizonte';
+  const ventasTot = A.venta.reduce((s, x) => s + x, 0);
+  const cagr15 = Math.pow(A.venta[4] / A.venta[0], 1 / 4) - 1;
+  const tir = irr(A.un), vpn = npv(R.v.wacc, A.un), pb = payback(R.acumY);
+  return [
+    { label: 'Ventas totales', sub: 'Año 1 – Año 5', value: short(ventasTot), note: `${short(A.venta[0])} → ${short(A.venta[4])}` },
+    { label: 'TCAC', sub: 'Año 1 – Año 5', value: pct(cagr15), note: `Ventas ${YEARS_S[0]}–${YEARS_S[4]} (2026 = 14 meses)`, tone: 'pos' },
+    { label: 'TIR', value: pct(tir), note: `vs. WACC ${pct(R.v.wacc)} · sobre utilidad neta`, tone: tir >= R.v.wacc ? 'pos' : 'neg' },
+    { label: 'VPN', value: short(vpn), note: 'Utilidad neta años 1–5 al WACC', tone: vpn >= 0 ? 'pos' : 'neg' },
+    { label: 'Payback', value: isFinite(pb) ? pb.toFixed(1) : '—', unit: isFinite(pb) ? 'años' : undefined, note: `Pérdida acumulada máx. (P&L) ${short(minAcum)} · equilibrio ${beLabel}` },
+    { label: 'Valuación', sub: 'DFC', value: short(R.v.equity), note: 'Valor del capital' },
+  ];
 }
 
 function Valuacion({ M, R, set }: { M: Model; R: Result; set: (f: (m: Model) => void) => void }) {
@@ -1670,8 +1792,9 @@ function Valuacion({ M, R, set }: { M: Model; R: Result; set: (f: (m: Model) => 
   const maxB = Math.max(...bridge.map(b => Math.abs(b.v)));
   return (
     <div style={{ display: 'grid', gap: 20 }}>
+      <FineKpis items={resumenKpis(M, R)} />
       <FineKpis items={[
-        { label: 'Valor del capital', sub: 'Pre-money · 1-ene-2027', value: short(v.equity), hl: 'Valor de AXON', note: `${v.cumple ? 'Cumple' : 'No cumple'} meta de ${short(V.meta)}`, tone: v.cumple ? 'pos' : 'neg' },
+        { label: 'Valor del capital', sub: 'Pre-money · 1-ene-2027', value: short(v.equity), hl: 'Valor de AXON' },
         { label: 'Valor de la empresa', sub: 'EV', value: short(v.ev), note: `EV / Ventas 2027: ${v.evVentas.toFixed(2)}x` },
         { label: 'WACC', value: pct(v.wacc, 2), note: `Ke ${pct(v.ke, 2)} · Kd neto ${pct(v.kdAt, 2)}` },
         { label: 'Peso del valor terminal', value: pct(v.pctTv), note: isFinite(v.evEbitda) && v.ebitda[4] > 0 ? `EV / EBITDA 2030: ${v.evEbitda.toFixed(2)}x · VT / EBITDA 2030: ${v.tvEbitda.toFixed(2)}x` : 'EBITDA 2030 ≤ 0' },
@@ -1696,21 +1819,6 @@ function Valuacion({ M, R, set }: { M: Model; R: Result; set: (f: (m: Model) => 
         </Card>
 
         <div style={{ display: 'grid', gap: 20 }}>
-          <Card title="Crecimiento 2028–2030" sub="Crecimiento de volumen de clientes y aumento de precio del desarrollo inicial (adicional a la inflación)" pad={false}>
-            <table style={{ borderCollapse: 'separate', borderSpacing: 0, width: '100%' }}>
-              <thead><tr><th style={{ ...th, textAlign: 'left' }}>Supuesto</th>{['2028', '2029', '2030'].map(y => <th key={y} style={th}>{y}</th>)}</tr></thead>
-              <tbody>
-                <tr><td style={{ ...tdBase, textAlign: 'left' }}>Crecimiento de volumen</td>{scenRow('volMeta')}</tr>
-                <tr><td style={{ ...tdBase, textAlign: 'left' }}>Aumento de precio del desarrollo inicial<span style={{ display: 'block', font: `300 10.5px ${FONT}`, color: C.faint }}>No aplica a las mensualidades</span></td>{scenRow('precioMeta')}</tr>
-                <tr><td style={{ ...tdBase, textAlign: 'left', fontWeight: 650, color: C.ink, background: C.tint }}>Ventas proyectadas</td>{[2, 3, 4].map(i => <td key={i} style={{ ...tdBase, fontWeight: 650, color: C.ink, background: C.tint }}>{short(R.annual.venta[i])}</td>)}</tr>
-              </tbody>
-            </table>
-            <div style={{ padding: '12px 20px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-              <span style={{ font: `300 13px ${FONT}`, color: C.ink2 }}>Meta de valor del capital</span>
-              <span style={{ display: 'flex', gap: 10, alignItems: 'center' }}>{inp('meta', 'money', 120)}
-                <span style={{ font: `650 12px ${FONT}`, padding: '4px 10px', borderRadius: 999, background: v.cumple ? C.posSoft : C.negSoft, color: v.cumple ? C.pos : C.neg }}>{v.cumple ? '✓ Cumple' : '✕ No cumple'}</span></span>
-            </div>
-          </Card>
           <Card title="Flujo libre y valor terminal">
             <KV l="D&A adicional (% de ventas)" note="La D&A del CAPEX de Supuestos ya está incluida">{inp('da')}</KV>
             <KV l="CAPEX adicional (% de ventas)" note="El CAPEX de Supuestos ya está incluido">{inp('capex')}</KV>
@@ -1937,7 +2045,7 @@ function Mercado() {
 type ChatMsg = { role: 'user' | 'assistant'; text: string };
 const AI_SUGGEST = [
   { k: 'Valuación', q: '¿Qué supuestos mueven más la valuación?' },
-  { k: 'Meta', q: '¿Qué tendría que pasar para llegar a $30M de valuación?' },
+  { k: 'Capital', q: '¿Por qué se necesita el capital nuevo y cómo se usa?' },
   { k: 'Mercado', q: 'Después de México, ¿qué mercado conviene atacar primero?' },
   { k: 'Riesgos', q: 'Resume los principales riesgos del plan a 5 años.' },
 ];
@@ -1978,17 +2086,17 @@ function aiContext(M: Model, R: Result): string {
     clientes: M.clients.map(c => c.name),
     gastos_mensuales_por_anio: { nota: 'montos mensuales base por año (sin inflación ni incremento de sueldos)', opex_mensual: arr(R.gastos.opexTot), nomina_admin_mensual: arr(R.gastos.adminTot), personal_directo_mensual: arr(R.gastos.dirTot), plantilla_total: R.gastos.hcTot, marketing_mensual: arr(R.gastos.mktTot), puestos: M.admin.map((a, i) => ({ puesto: a.name, tipo: a.directo ? 'costo directo (personal directo)' : 'gasto administrativo', sueldo_mensual: a.sal, plantilla: a.hc, costo_mensual: arr(R.gastos.admin[i]) })) },
     credito: { ...M.credito, estatus: 'ya dispuesto (no es dinero nuevo); prórroga de pago: capital e intereses desde enero 2027', pagos_anuales: R.cred.years.map(y => ({ pago: r(y.pago), interes: r(y.interes), capital: r(y.capital) })) },
-    escenario_meta: { crecimiento_volumen: R.scen.vol.map(r4), aumento_precio: R.scen.precio.map(r4) },
+    escenario_crecimiento: { crecimiento_volumen: R.scen.vol.map(r4), aumento_precio: R.scen.precio.map(r4) },
     valuacion: {
       fecha_y_tipo: 'pre-money al 1-ene-2027: caja inicial en cero, deuda bancaria vigente, sin incluir el capital nuevo',
       supuestos: (({ volBase, precioBase, escenario, ct, ...v }) => v)(M.val), wacc: r4(V.wacc), ke: r4(V.ke), kd_despues_impuestos: r4(V.kdAt), beta_apalancada: r4(V.betaL), d_e: r4(V.de),
       ventas: arr(V.ventas), ebitda: arr(V.ebitda), nopat: arr(V.nopat), capex: arr(V.capexA), capital_trabajo: arr(V.ctA), capital_trabajo_supuestos: M.val.wc, capital_trabajo_neto: arr(V.wc.ctn), flujo_libre: arr(V.fcff), valor_presente_flujos: arr(V.pv),
       valor_terminal: r(V.tv), vp_valor_terminal: r(V.pvTv), peso_valor_terminal: r4(V.pctTv), valor_empresa_EV: r(V.ev), deuda: r(V.deuda), caja: r(V.caja), valor_capital: r(V.equity),
-      ev_ventas_2027: r4(V.evVentas), ev_ebitda_2030: r4(V.evEbitda), valor_terminal_ebitda_2030: r4(V.tvEbitda), meta_valuacion: M.val.meta, cumple_meta: V.cumple,
+      ev_ventas_2027: r4(V.evVentas), ev_ebitda_2030: r4(V.evEbitda), valor_terminal_ebitda_2030: r4(V.tvEbitda),
       sensibilidad_wacc_vs_g: { wacc: V.sensA.rows, g: V.sensA.cols, valor_capital: V.sensA.m.map(arr) },
       sensibilidad_prima_startup_vs_g: { prima: V.sensB.rows, g: V.sensB.cols, valor_capital: V.sensB.m.map(arr) },
     },
-    ciclo_comercial: (() => { const et = M.ciclo ?? []; const total = et.reduce((s, e) => s + e.dias, 0); let acc = 0;
+    ciclo_comercial: (() => { const et = cicloConDso(M.ciclo ?? [], M.val.wc?.dso ?? 30); const total = et.reduce((s, e) => s + e.dias, 0); let acc = 0;
       return { descripcion: 'días del primer contacto (día 0) a cada hito; la administración y mantenimiento arranca el mes siguiente al total (días ÷ 30.5)', hitos: [{ etapa: 'PRIMER CONTACTO', dia: 0 }, ...et.map(e => ({ etapa: e.etapa, dias_etapa: e.dias, dia_acumulado: (acc += e.dias) }))], total_dias: total, mantenimiento_desde_mes: Math.floor(total / 30.5) + 1 }; })(),
     necesidad_de_capital: (() => { const F = computeFlujo(M, R); return {
       registro_cartera: 'firma de contrato', meses_desde_firma: { primer_pago: F.h.L1, finiquito: F.h.L2, mantenimiento_cobrado: F.h.Lmant + F.h.Ldso },
@@ -2173,6 +2281,10 @@ function wireAdmin(m: Model): boolean {
   let changed = false;
   // Solo existe el escenario Meta
   if (m.val.escenario !== 2) { m.val.escenario = 2; changed = true; }
+  // Mantenimiento con contrato anual: la mensualidad queda fija después del primer mes
+  m.clients.forEach(c => { const f = fijarMant(c.mant2, c.mant1[c.mant1.length - 1] ?? 0); if (JSON.stringify(f) !== JSON.stringify(c.mant2)) { c.mant2 = f; changed = true; } });
+  // Primera disposición del capital nuevo: julio 2027 (inicio del T3)
+  if (!m.migr?.primeraJul) { m.plan = { inicio: 14, colchonMeses: m.plan?.colchonMeses ?? 1, primera: 20 }; m.migr = { ...(m.migr ?? {}), primeraJul: true }; changed = true; }
   if (m.capex && !m.capex.equipos.porPersona && !m.migr?.equiposPersona) { m.capex.equipos = { ...m.capex.equipos, cantidad: 0, precio: 25000, porPersona: true }; m.migr = { ...(m.migr ?? {}), equiposPersona: true }; changed = true; }
   if (m.capex === undefined) { m.capex = { equipos: { cantidad: 0, precio: 25000, mes: 14, anios: 3, porPersona: true }, oficinas: { monto: 500000, mes: 20, anios: 5 } }; changed = true; }
   if (m.ciclo === undefined || m.ciclo[0]?.etapa === 'Primer contacto y calificación') { m.ciclo = [{"etapa": "ANÁLISIS DE MANAGEMENT Y PROCESOS / NDA", "dias": 30}, {"etapa": "PRIMERA MAQUETA", "dias": 30}, {"etapa": "AJUSTES A LA ARQUITECTURA (MAQUETAS)", "dias": 30}, {"etapa": "CIERRE, FIRMA DE CONTRATO Y ALTA COMO PROVEEDOR", "dias": 30}, {"etapa": "COMIENZO DESARROLLO Y FACTURACIÓN 50%", "dias": 15}, {"etapa": "PAGO 50%", "dias": 30}, {"etapa": "ENTREGA FINAL / GO-LIVE Y FACTURACIÓN 50%", "dias": 60}, {"etapa": "PAGO FINIQUITO 50%", "dias": 30}]; changed = true; }
