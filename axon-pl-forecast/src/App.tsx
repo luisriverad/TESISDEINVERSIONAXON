@@ -4,7 +4,7 @@ import DATA from './data/model.json';
 import LOGO from './assets/axon-logo.png';
 import MARK from './assets/axon-mark.png';
 import AMERICAS from './data/americas.json';
-import { computeFlujo, planDisposiciones, mesCorto, trimestre, esInicioTrimestre, INICIOS, REDONDEO, N_MESES, type Flujo, type Vista, type Plan } from './lib/flujo';
+import { computeFlujo, planDisposiciones, mesCorto, REDONDEO, N_MESES, type Flujo, type Vista, type Plan } from './lib/flujo';
 import { geoArea, geoAzimuthalEqualArea, geoPath } from 'd3-geo';
 
 // ===================== Marca AXON =====================
@@ -360,21 +360,22 @@ function Resumen({ R, M }: { R: Result; M: Model }) {
 }
 
 // ---------- Piezas de diseño fino (Resumen) ----------
-type FineKpiDef = { label: string; sub?: string; value: string; unit?: string; note?: string; tone?: 'pos' | 'neg' };
+type FineKpiDef = { label: string; sub?: string; value: string; unit?: string; note?: string; tone?: 'pos' | 'neg'; hl?: string };
 function FineKpis({ items }: { items: FineKpiDef[] }) {
   return (
     <section style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 0, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', overflow: 'hidden' }}>
       {items.map((k, i) => (
-        <div key={k.label} style={{ padding: '22px 22px 20px', borderLeft: i ? `1px solid ${C.line2}` : 'none', display: 'flex', flexDirection: 'column', gap: 10, minHeight: 132 }}>
+        <div key={k.label} style={{ padding: '22px 22px 20px', borderLeft: i ? `1px solid ${C.line2}` : 'none', display: 'flex', flexDirection: 'column', gap: 10, minHeight: 132, background: k.hl ? C.ink : undefined }}>
+          {k.hl && <span style={{ alignSelf: 'flex-start', font: `700 9.5px ${FONT}`, letterSpacing: '.16em', textTransform: 'uppercase', color: C.ink, background: C.yellow, padding: '4px 8px' }}>{k.hl}</span>}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 3, minHeight: 28 }}>
-            <span style={{ font: `650 10px ${FONT}`, color: C.ink, textTransform: 'uppercase', letterSpacing: '.16em' }}>{k.label}</span>
-            {k.sub && <span style={{ font: `300 10px ${FONT}`, color: C.faint, textTransform: 'uppercase', letterSpacing: '.12em' }}>{k.sub}</span>}
+            <span style={{ font: `650 10px ${FONT}`, color: k.hl ? '#fff' : C.ink, textTransform: 'uppercase', letterSpacing: '.16em' }}>{k.label}</span>
+            {k.sub && <span style={{ font: `300 10px ${FONT}`, color: k.hl ? 'rgba(255,255,255,.55)' : C.faint, textTransform: 'uppercase', letterSpacing: '.12em' }}>{k.sub}</span>}
           </div>
-          <div style={{ font: `200 36px/1 ${FONT}`, color: C.ink, letterSpacing: '-0.035em', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+          <div style={{ font: `${k.hl ? 600 : 200} 36px/1 ${FONT}`, color: k.hl ? C.yellow : C.ink, letterSpacing: '-0.035em', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
             {k.value}{k.unit && <span style={{ font: `300 14px ${FONT}`, color: C.muted, letterSpacing: 0, marginLeft: 6 }}>{k.unit}</span>}
           </div>
           {k.note && (
-            <div style={{ marginTop: 'auto', display: 'flex', alignItems: 'flex-start', gap: 7, font: `300 11.5px/1.4 ${FONT}`, color: C.muted }}>
+            <div style={{ marginTop: 'auto', display: 'flex', alignItems: 'flex-start', gap: 7, font: `300 11.5px/1.4 ${FONT}`, color: k.hl ? 'rgba(255,255,255,.75)' : C.muted }}>
               <span style={{ width: 5, height: 5, borderRadius: 99, marginTop: 5, flex: 'none', background: k.tone === 'pos' ? C.pos : k.tone === 'neg' ? C.neg : C.yellow }} />
               <span>{k.note}</span>
             </div>
@@ -437,7 +438,7 @@ function PLTable({ cols, data, rows, acum, total, fine, compact }: { cols: strin
             if (r.t === 'sec') return <tr key={r.l}><td colSpan={n + 2} style={{ ...tdBase, ...stickyL, font: `650 10px ${FONT}`, color: C.gold, textTransform: 'uppercase', letterSpacing: '.16em', paddingTop: cp ? 14 : 22, paddingBottom: cp ? 6 : 8, paddingLeft: 20, background: C.surface, borderBottom: `1px solid ${C.line2}` }}>{r.l}</td></tr>;
             const nextPct = !!rows[ri + 1] && isPctRow(rows[ri + 1]);
             const bold = r.t === 'total' || r.t === 'acum';
-            const bg = r.t === 'total' && !fine ? C.tint : C.surface;
+            const bg = r.k === 'empresas' || r.l.startsWith('Clientes') ? '#FFF9E3' : r.t === 'total' && !fine ? C.tint : C.surface;
             const td: React.CSSProperties = !fine ? tdBase : isPctRow(r) ? { ...tdF, padding: cp ? `0 ${px}px 7px` : '0 12px 11px', borderBottom: `1px solid ${C.line2}` } : r.t === 'acum' ? { ...tdF, padding: cp ? `10px ${px}px` : '14px 12px', borderTop: `1px solid ${C.ink}` } : nextPct ? tdF : { ...tdF, padding: cp ? `7px ${px}px` : '10px 12px', borderBottom: `1px solid ${C.line2}` };
             const isPct = r.t === 'pct' || r.t === 'growth';
             const vals = r.vals ? r.vals : r.t === 'growth' ? data[r.k!].map((v, i) => (i ? ratio(v, data[r.k!][i - 1]) - 1 : NaN)) : isPct ? data[r.num!].map((v, i) => ratio(v, data[r.den!][i])) : r.t === 'acum' ? acum : data[r.k!];
@@ -533,7 +534,6 @@ function PL({ M, R, set }: { M: Model; R: Result; set: (f: (m: Model) => void) =
         </span>
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
           <Segmented warm value={view} onChange={setView} options={[{ v: 'y1', l: 'Año 1 · mensual' }, { v: 'y2', l: 'Año 2 · mensual' }]} />
-          <span style={{ font: `300 12.5px ${FONT}`, color: C.muted }}>{M.params.aplicarInflacion ? 'MXN nominales' : 'MXN sin inflación'} · negativos en rojo entre paréntesis</span>
           <button onClick={() => setView(view === 'cartera' ? 'y2' : 'cartera')} aria-pressed={view === 'cartera'}
             style={{ ...btn, background: view === 'cartera' ? C.ink : C.surface, color: view === 'cartera' ? '#fff' : C.ink, borderColor: view === 'cartera' ? C.ink : C.line }}>
             {view === 'cartera' ? '← Volver al P&L' : 'Cartera de clientes'}
@@ -543,7 +543,7 @@ function PL({ M, R, set }: { M: Model; R: Result; set: (f: (m: Model) => void) =
       {view === 'cartera' ? <Cartera M={M} R={R} set={set} /> : (
         <Card pad={false}
           title={view === 'anual' ? 'Estado de resultados proyectado' : view === 'y1' ? 'Año 1 · nov-25 a dic-26 (14 meses)' : 'Año 2 · 2027'}
-          sub={view === 'anual' ? '2028–2030 proyectados con el crecimiento de volumen y precio de Valuación' : view === 'y1' ? 'Presupuesto/ejercido capturado en el modelo' : 'Calculado desde la cartera de clientes y la estructura de gastos'}>
+          sub={view === 'anual' ? undefined : view === 'y1' ? 'Presupuesto/ejercido capturado en el modelo' : 'Calculado desde la cartera de clientes y la estructura de gastos'}>
           {view === 'anual' && <PLTable compact cols={YEARS} data={R.annual} acum={R.acumY} rows={M.params.amortizarPerdidas ? [...PL_ROWS_ANUAL, { l: 'Pérdidas fiscales', t: 'sec' }, { l: 'Pérdida aplicada contra la utilidad', vals: R.fiscal.aplicada }, { l: 'Saldo por amortizar al cierre', vals: R.fiscal.saldo }] : PL_ROWS_ANUAL} />}
           {view === 'y1' && <PLTable compact cols={m1} data={R.m1} rows={PL_ROWS} acum={R.acum1} total />}
           {view === 'y2' && <PLTable compact cols={m2} data={R.m2} rows={PL_ROWS} acum={R.acum2} total />}
@@ -757,20 +757,30 @@ function Waterfall({ F }: { F: Flujo }) {
     { l: 'Necesidad máxima de caja', s: `${F.mesesOperacion.toFixed(1)} meses de operación`, v: tot, from: 0, col: C.ink, total: true },
   ];
   const max = Math.max(tot, a + k + b + c, 1);
+  // Cascada vertical: cada barra arranca donde terminó la anterior; la última es el total
+  const W = 560, H = 270, pt = 30, pb = 62, pl = 8, pr = 8, n = bars.length;
+  const slot = (W - pl - pr) / n, bw = slot * 0.56;
+  const Y = (v: number) => pt + (1 - v / max) * (H - pt - pb);
+  const words = (t: string) => { const w = t.replace(/^\+ /, '').split(' '); const h = Math.ceil(w.length / 2); return w.length > 1 ? [w.slice(0, h).join(' '), w.slice(h).join(' ')] : w; };
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      {bars.map(r => (
-        <div key={r.l}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10 }}>
-            <span><span style={{ font: `${r.total ? 650 : 400} 12.5px ${FONT}`, color: C.ink }}>{r.l}</span><span style={{ font: `300 11px ${FONT}`, color: C.faint, marginLeft: 8 }}>{r.s}</span></span>
-            <span style={{ font: `${r.total ? 600 : 300} ${r.total ? 18 : 14}px ${FONT}`, fontVariantNumeric: 'tabular-nums' }}>{short(r.v)}</span>
-          </div>
-          <div style={{ position: 'relative', height: r.total ? 12 : 9, marginTop: 6, background: C.tint2, borderRadius: 3 }}>
-            <div style={{ position: 'absolute', left: `${r.from / max * 100}%`, width: `${r.v / max * 100}%`, top: 0, bottom: 0, background: r.col, borderRadius: 3, transition: 'all .3s' }} />
-          </div>
-        </div>
-      ))}
-    </div>
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto', display: 'block' }} role="img" aria-label="Cascada de la necesidad de caja">
+      <line x1={pl} x2={W - pr} y1={Y(0)} y2={Y(0)} stroke={C.line} />
+      {bars.map((r, i) => {
+        const x = pl + i * slot + (slot - bw) / 2;
+        const y0 = Y(r.from + r.v), y1 = Y(r.from);
+        const nx = pl + (i + 1) * slot + (slot - bw) / 2;
+        return (
+          <g key={r.l}>
+            <title>{`${r.l}: ${r.s}`}</title>
+            <rect x={x} y={y0} width={bw} height={Math.max(1, y1 - y0)} fill={r.col} style={{ transition: 'all .3s' }} />
+            {i < n - 1 && <line x1={x + bw} x2={nx} y1={y0} y2={y0} stroke={C.faint} strokeDasharray="3 3" />}
+            <text x={x + bw / 2} y={y0 - 8} textAnchor="middle" style={{ font: `${r.total ? 650 : 400} ${r.total ? 15 : 13}px ${FONT}`, fill: C.ink, fontVariantNumeric: 'tabular-nums' }}>{i && !r.total ? '+' : ''}{short(r.v)}</text>
+            {words(r.l).map((w, k) => <text key={k} x={x + bw / 2} y={H - pb + 18 + k * 14} textAnchor="middle" style={{ font: `${r.total ? 650 : 400} 11.5px ${FONT}`, fill: C.ink }}>{w}</text>)}
+            {r.total && <text x={x + bw / 2} y={H - pb + 50} textAnchor="middle" style={{ font: `300 10.5px ${FONT}`, fill: C.faint }}>{r.s}</text>}
+          </g>
+        );
+      })}
+    </svg>
   );
 }
 
@@ -794,11 +804,11 @@ function ClienteTipo({ F }: { F: Flujo }) {
   const row = (l: string, s: string, kind: 'pl' | 'real') => (
     <div style={{ display: 'grid', gridTemplateColumns: `150px repeat(${meses.length}, 1fr)`, gap: 3, alignItems: 'center' }}>
       <span><span style={{ display: 'block', font: `600 11.5px ${FONT}`, color: C.ink }}>{l}</span><span style={{ display: 'block', font: `300 10px ${FONT}`, color: C.faint }}>{s}</span></span>
-      {meses.map(m => { const c = cell(m, kind); return <span key={m} style={{ height: 22, borderRadius: 4, background: c ? c.c : C.tint2, display: 'grid', placeItems: 'center', font: `600 9.5px ${FONT}`, color: '#fff' }}>{c?.t}</span>; })}
+      {meses.map(m => { const c = cell(m, kind); return <span key={m} style={{ height: 70, borderRadius: 4, background: c ? c.c : C.tint2, display: 'grid', placeItems: 'center', font: `600 11px ${FONT}`, color: '#fff' }}>{c?.t}</span>; })}
     </div>
   );
   return (
-    <div style={{ display: 'grid', gap: 8 }}>
+    <div style={{ display: 'grid', gap: 18 }}>
       <div style={{ display: 'grid', gridTemplateColumns: `150px repeat(${meses.length}, 1fr)`, gap: 3, font: `300 9.5px ${FONT}`, color: C.faint, textAlign: 'center' }}>
         <span />{meses.map(m => <span key={m} style={{ fontWeight: m === 0 ? 650 : 300, color: m === 0 ? C.ink : C.faint }}>{m === 0 ? 'Mes 0' : m}</span>)}
       </div>
@@ -844,25 +854,26 @@ function PlanChart({ P, F }: { P: Plan; F: Flujo }) {
         </g>
       ))}
       <path d={line} fill="none" stroke={C.ink} strokeWidth={1.4} strokeLinejoin="round" />
-      {meses.filter(t => esInicioTrimestre(t) && t !== P.inicio).map(t => <line key={t} x1={X(t) - (W - pl - pr) / n / 2} x2={X(t) - (W - pl - pr) / n / 2} y1={pt} y2={H - pb} stroke={C.line2} />)}
+      {meses.filter(t => P.cortes.includes(t) && t !== P.inicio).map(t => <line key={t} x1={X(t) - (W - pl - pr) / n / 2} x2={X(t) - (W - pl - pr) / n / 2} y1={pt} y2={H - pb} stroke={C.line2} />)}
     </svg>
   );
 }
 
+const PRIMERA_DEF = 19; // jun-27
+const planDe = (M: Model, F: Flujo) => planDisposiciones(F, 14, M.plan?.colchonMeses ?? 1, M.plan?.primera ?? PRIMERA_DEF);
 function PlanDisposiciones({ M, R, F, set }: { M: Model; R: Result; F: Flujo; set: (f: (m: Model) => void) => void }) {
-  const cfg = M.plan ?? { inicio: 14, colchonMeses: 1 };
-  const P = useMemo(() => planDisposiciones(F, cfg.inicio, cfg.colchonMeses), [F, cfg.inicio, cfg.colchonMeses]);
-  const upd = (k: 'inicio' | 'colchonMeses', v: number) => set(m => { m.plan = { ...(m.plan ?? { inicio: 14, colchonMeses: 1 }), [k]: v }; });
+  const P = useMemo(() => planDe(M, F), [M, F]);
+  const upd = (k: 'primera' | 'colchonMeses', v: number) => set(m => { m.plan = { ...(m.plan ?? { inicio: 14, colchonMeses: 1, primera: PRIMERA_DEF }), inicio: 14, [k]: v }; });
   const con = P.disp.filter(d => d.monto > 0.5);
   const lab = { font: `650 10px ${FONT}`, textTransform: 'uppercase' as const, letterSpacing: '.16em', color: C.ink };
   return (
-    <Card eyebrow="Disposiciones trimestrales" title="Plan de disposiciones del capital nuevo" sub={`El capital no se entrega en una sola exhibición: se dispone al inicio de cada trimestre lo justo para que la caja nunca baje del colchón. El crédito bancario ya se dispuso (no es dinero nuevo): solo resta caja con su pago de capital mensual desde ene-27. Montos redondeados a múltiplos de ${short(REDONDEO)}.`}>
+    <Card eyebrow="Disposiciones trimestrales" title="Plan de disposiciones del capital nuevo" sub={`El capital no se entrega en una sola exhibición: se dispone cada 3 meses, a partir de la primera disposición, lo justo para que la caja nunca baje del colchón. El crédito bancario ya se dispuso (no es dinero nuevo): solo resta caja con su pago de capital mensual desde ene-27. Montos redondeados a múltiplos de ${short(REDONDEO)}.`}>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 22, alignItems: 'center', marginBottom: 18 }}>
         <label style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <span style={lab}>Primera disposición</span>
-          <select value={P.inicio} onChange={e => upd('inicio', +e.target.value)}
+          <select value={P.primera} onChange={e => upd('primera', +e.target.value)}
             style={{ border: `1px solid ${C.yellowLine}`, background: C.yellowSoft, borderRadius: 99, padding: '5px 12px', font: `500 12.5px ${FONT}`, color: C.ink, cursor: 'pointer' }}>
-            {INICIOS.filter(t => t <= 50).map(t => <option key={t} value={t}>{trimestre(t)} · {mesCorto(t)}</option>)}
+            {Array.from({ length: 24 }, (_, i) => 14 + i).map(t => <option key={t} value={t}>{mesCorto(t)}</option>)}
           </select>
         </label>
         <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -876,7 +887,9 @@ function PlanDisposiciones({ M, R, F, set }: { M: Model; R: Result; F: Flujo; se
           ['Capital nuevo total', short(P.total), `${P.n} disposiciones trimestrales`],
           ['Mayor disposición', short(P.mayor), con.find(d => d.monto === P.mayor)?.trimestre ?? '—'],
           ['Primera / última', con.length ? `${con[0].trimestre} → ${P.ultima}` : '—', 'Después ya no se requiere capital'],
-          ['Déficit previo', short(P.deficitPrevio), `Caja consumida antes de ${mesCorto(P.inicio)} (ya fondeada)`],
+          P.primera > P.inicio
+            ? ['Puente hasta la primera', short(P.puente), `Caja negativa ${mesCorto(P.inicio)} a ${mesCorto(P.primera - 1)}; la cubre la disposición de ${mesCorto(P.primera)}`]
+            : ['Déficit previo', short(P.deficitPrevio), `Caja consumida antes de ${mesCorto(P.inicio)} (ya fondeada)`],
         ].map(([l, v, n], k) => (
           <div key={l} style={{ padding: '14px 18px 12px', paddingLeft: k ? 18 : 0, borderLeft: k ? `1px solid ${C.line2}` : undefined }}>
             <div style={lab}>{l}</div>
@@ -886,7 +899,7 @@ function PlanDisposiciones({ M, R, F, set }: { M: Model; R: Result; F: Flujo; se
         ))}
       </div>
 
-      <Legend items={[{ c: C.yellow, l: 'Disposición al inicio del trimestre' }, { c: C.ink, l: 'Caja mes a mes con el plan' }, ...(P.colchon ? [{ c: C.neg, l: 'Colchón mínimo', dash: true }] : [])]} />
+      <Legend items={[{ c: C.yellow, l: 'Disposición (cada 3 meses)' }, { c: C.ink, l: 'Caja mes a mes con el plan' }, ...(P.colchon ? [{ c: C.neg, l: 'Colchón mínimo', dash: true }] : [])]} />
       <div style={{ marginTop: 8 }}><PlanChart P={P} F={F} /></div>
 
       <div style={{ marginTop: 16, overflowX: 'auto' }}>
@@ -900,7 +913,7 @@ function PlanDisposiciones({ M, R, F, set }: { M: Model; R: Result; F: Flujo; se
               const mx = (v: number) => (Math.abs(v) < 0.5 ? '—' : v < 0 ? `(${money(-v)})` : money(v));
               return (
                 <tr key={d.t} style={{ background: on ? C.yellowSoft : undefined }}>
-                  <td style={{ padding: '7px 10px', borderBottom: `1px solid ${C.line2}`, fontWeight: on ? 600 : 300 }}>{d.trimestre}<span style={{ color: C.faint, fontWeight: 300, marginLeft: 6 }}>{mesCorto(d.t)}</span></td>
+                  <td style={{ padding: '7px 10px', borderBottom: `1px solid ${C.line2}`, fontWeight: on ? 600 : 300 }}>{d.trimestre}{d.t >= P.primera && <span style={{ color: C.faint, fontWeight: 300, marginLeft: 6 }}>{mesCorto(d.t)}</span>}</td>
                   {td(on ? money(d.monto) : '—', { fontWeight: on ? 600 : 300 })}
                   {td(money(d.acumulado), { color: C.muted })}
                   {td(mx(d.flujoOperativo), { color: d.flujoOperativo < 0 ? C.neg : C.ink })}
@@ -913,12 +926,13 @@ function PlanDisposiciones({ M, R, F, set }: { M: Model; R: Result; F: Flujo; se
           </tbody>
         </table>
       </div>
-      <div style={{ font: `300 11px ${FONT}`, color: C.faint, marginTop: 10 }}>Supuestos: la caja al inicio de {mesCorto(P.inicio)} es cero y el déficit anterior (punto más bajo: {short(P.deficitPrevio)}) ya está fondeado. Conciliación: necesidad máxima {short(F.ciclo.necesidad)} ≈ déficit previo + capital del plan − colchón − redondeo a {short(REDONDEO)}. Horizonte a dic-30: no incluye cobranza posterior, la PTU 2030 (pagadera en may-31) ni el capital del crédito que vence en 2031.</div>
+      <div style={{ font: `300 11px ${FONT}`, color: C.faint, marginTop: 10 }}>Supuestos: la caja al inicio de {mesCorto(P.inicio)} es cero y el déficit anterior (punto más bajo: {short(P.deficitPrevio)}) ya está fondeado.{P.primera > P.inicio ? ` El capital nuevo entra hasta ${mesCorto(P.primera)}: de ${mesCorto(P.inicio)} a ${mesCorto(P.primera - 1)} la operación consume ${short(P.puente)} sin capital nuevo (puente con socios o proveedores) y la primera disposición lo repone.` : ''} Conciliación: necesidad máxima {short(F.ciclo.necesidad)} ≈ déficit previo + capital del plan − colchón − redondeo a {short(REDONDEO)}. Horizonte a dic-30: no incluye cobranza posterior, la PTU 2030 (pagadera en may-31) ni el capital del crédito que vence en 2031.</div>
     </Card>
   );
 }
 
 function FlujoTab({ M, R, set }: { M: Model; R: Result; set: (f: (m: Model) => void) => void }) {
+  const mvs = (x: number) => `+${x} ${x === 1 ? 'mes' : 'meses'} vs. P&L`;
   const F = useMemo(() => computeFlujo(M, R), [M, R]);
   const [vistaT, setVistaT] = useState<'anual' | 'mensual'>('anual');
   const h = F.h;
@@ -950,31 +964,32 @@ function FlujoTab({ M, R, set }: { M: Model; R: Result; set: (f: (m: Model) => v
     <div style={{ display: 'grid', gap: 20 }}>
       <FineKpis items={[
         { label: 'Según P&L', sub: 'Curva J contable', value: short(F.pl.necesidad), note: `Pico en ${mesCorto(F.pl.mesPico)}` },
-        { label: '+ Crédito, CAPEX y capital de trabajo', sub: `Pago de capital · CAPEX · cobro ${M.val.wc?.dso ?? 30} d · pago ${M.val.wc?.dpo ?? 30} d`, value: short(F.wc.necesidad), note: `+${short(F.plb.necesidad - F.pl.necesidad)} crédito y CAPEX, +${short(Math.max(0, F.wc.necesidad - F.plb.necesidad))} días de cartera y proveedores` },
+        { label: '+ Crédito, CAPEX y capital de trabajo', sub: `Pago de capital · CAPEX · cobro ${M.val.wc?.dso ?? 30} d · pago ${M.val.wc?.dpo ?? 30} d`, value: short(F.wc.necesidad), hl: 'Necesidad de nuevo capital', note: `+${short(F.plb.necesidad - F.pl.necesidad)} crédito y CAPEX, +${short(Math.max(0, F.wc.necesidad - F.plb.necesidad))} días de cartera y proveedores` },
         { label: '+ Ciclo comercial', sub: 'Necesidad máxima de caja', value: short(F.ciclo.necesidad), note: `Pico en ${mesCorto(F.ciclo.mesPico)} · ${F.ciclo.mesRecupera >= 0 ? `caja positiva desde ${mesCorto(F.ciclo.mesRecupera)}` : 'aún negativa a dic-30'}`, tone: 'neg' },
         { label: 'Equivale a', sub: 'Egreso mensual promedio 2027', value: F.mesesOperacion.toFixed(1), unit: 'meses', note: `${short(F.operacionMensual)} al mes de egreso operativo (sin capital del crédito ni CAPEX)` },
+        { label: 'Participación del inversionista', sub: 'Post-money', value: pct(ratio(F.wc.necesidad, R.v.equity + F.wc.necesidad), 1), hl: 'Para quien mete el capital', note: `${short(F.wc.necesidad)} sobre post-money de ${short(R.v.equity + F.wc.necesidad)} (pre-money ${short(R.v.equity)} de Valuación)` },
       ]} />
 
-      <Card eyebrow="La pregunta del fondo" title="¿Por qué pedimos capital de trabajo adicional?">
+      <Card title="¿Por qué pedimos capital de trabajo adicional?">
         <Legend items={[{ c: C.ink2, l: 'Acumulado según P&L' }, { c: FL.wc, l: '+ Crédito, CAPEX y capital de trabajo (CxC / CxP)', dash: true }, { c: FL.ciclo, l: '+ Ciclo comercial = caja real' }, { c: 'rgba(201,151,0,.35)', l: 'Caja que falta vs. P&L' }]} />
         <div style={{ marginTop: 10 }}><CashChart F={F} /></div>
       </Card>
 
       <PlanDisposiciones M={M} R={R} F={F} set={set} />
 
-      <div className="axon-two" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1.25fr)', gap: 18, alignItems: 'start' }}>
+      <div className="axon-two" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1.25fr)', gap: 18, alignItems: 'stretch' }}>
         <Card eyebrow="De dónde sale la cifra" title="Composición de la necesidad de caja">
           <Waterfall F={F} />
           <div style={{ marginTop: 18, paddingTop: 14, borderTop: `1px solid ${C.line2}`, display: 'grid', gap: 6, font: `300 12px/1.5 ${FONT}`, color: C.ink2 }}>
             <div>• El P&L solo explica <strong style={{ fontWeight: 600 }}>{pct(ratio(F.pl.necesidad, F.ciclo.necesidad), 0)}</strong> de la caja que realmente se necesita.</div>
             <div>• Crédito bancario de <strong style={{ fontWeight: 600 }}>{short(F.credito)}</strong> ya dispuesto: no aporta dinero nuevo y, con la prórroga, su pago de capital resta <strong style={{ fontWeight: 600 }}>{short(F.det.capitalCredito.reduce((a, b) => a + b, 0))}</strong> de caja entre 2027 y 2030.</div>
-            <div>• Capital nuevo en disposiciones trimestrales: <strong style={{ fontWeight: 600, color: C.neg }}>{short(planDisposiciones(F, M.plan?.inicio ?? 14, M.plan?.colchonMeses ?? 1).total)}</strong> desde {mesCorto(M.plan?.inicio ?? 14)} (ver plan).</div>
+            <div>• Capital nuevo en disposiciones trimestrales: <strong style={{ fontWeight: 600, color: C.neg }}>{short(planDe(M, F).total)}</strong> desde {mesCorto(M.plan?.primera ?? PRIMERA_DEF)} (ver plan).</div>
           </div>
         </Card>
         <Card eyebrow="Un cliente nuevo" title="P&L vs. caja para un mismo cliente" sub={`Mes 0 = firma de contrato, cuando la cartera registra al cliente. Con el ciclo comercial de Supuestos: primer pago en el mes ${h.L1}, finiquito en el mes ${h.L2} y mantenimiento cobrado desde el mes ${h.Lmant + h.Ldso}.`}>
           <ClienteTipo F={F} />
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', marginTop: 16, borderTop: `1px solid ${C.line2}` }}>
-            {[['Primer pago', `día ${h.diaPago1}`, `+${h.L1} meses vs. P&L`], ['Finiquito', `día ${h.diaFiniquito}`, `+${Math.max(0, h.L2 - h.pDev2)} meses vs. P&L`], ['Mantenimiento', `mes ${h.mesMant} del ciclo`, `+${Math.max(0, h.Lmant + h.Ldso - h.pMant)} meses vs. P&L`]].map(([l, v, n], i) => (
+            {[['Primer pago', `día ${h.diaPago1}`, mvs(h.L1)], ['Finiquito', `día ${h.diaFiniquito}`, mvs(Math.max(0, h.L2 - h.pDev2))], ['Mantenimiento', `mes ${h.mesMant} del ciclo`, mvs(Math.max(0, h.Lmant + h.Ldso - h.pMant))]].map(([l, v, n], i) => (
               <div key={l} style={{ padding: '12px 0 0', paddingLeft: i ? 14 : 0, borderLeft: i ? `1px solid ${C.line2}` : undefined }}>
                 <div style={{ font: `650 9.5px ${FONT}`, letterSpacing: '.14em', textTransform: 'uppercase' }}>{l}</div>
                 <div style={{ font: `250 20px ${FONT}`, marginTop: 4 }}>{v}</div>
@@ -1046,7 +1061,7 @@ function FlujoTab({ M, R, set }: { M: Model; R: Result; set: (f: (m: Model) => v
         </ScrollX>
       </Card>
 
-      <Card eyebrow="Metodología" title="Cómo se calcula" sub="Para que el fondo pueda replicar cada cifra.">
+      <Card eyebrow="Metodología" title="Cómo se calcula">
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 10 }}>
           {[
             ['Base', 'P&L mensual del modelo: meses de nov-25 a dic-27 y años 2028–2030 repartidos en 12 meses iguales. Incluye carga social, incrementos e inflación de Supuestos.'],
@@ -1072,7 +1087,7 @@ function FlujoTab({ M, R, set }: { M: Model; R: Result; set: (f: (m: Model) => v
 const COST_ROWS: RowDef[] = [
   { k: 'venta', l: 'Total venta', t: 'total' },
   { l: 'Costos directos', t: 'sec' },
-  { k: 'personal', l: 'Personal directo' }, { k: 'ia', l: 'Consumo IA' }, { k: 'repos', l: 'Repositorios' }, { k: 'host', l: 'Hostings' }, { k: 'plat', l: 'Plataformas (TC)' }, { k: 'comis', l: 'Comisiones' },
+  { k: 'ia', l: 'Consumo IA' }, { k: 'repos', l: 'Repositorios' }, { k: 'host', l: 'Hostings' }, { k: 'plat', l: 'Plataformas (TC)' }, { k: 'comis', l: 'Comisiones' }, { k: 'personal', l: 'Personal directo' },
   { k: 'costos', l: 'Total costos', t: 'total' }, { l: '% costo / venta', t: 'pct', num: 'costos', den: 'venta' },
   { k: 'ub', l: 'Utilidad bruta', t: 'total' }, { l: 'Margen bruto', t: 'pct', num: 'ub', den: 'venta' },
 ];
@@ -1086,11 +1101,11 @@ function Costos({ M, R, set }: { M: Model; R: Result; set: (f: (m: Model) => voi
         { label: 'Equipo directo', sub: '2027 → 2030', value: `${hcAdm(M, 1, true)} → ${hcAdm(M, 4, true)}`, unit: 'personas' },
         { label: 'Margen bruto', sub: '2030', value: pct(ratio(A.ub[4], A.venta[4])), note: `Utilidad bruta ${short(A.ub[4])}` },
       ]} />
-      <PlantillaTable M={M} R={R} set={set} directo eyebrow="Costo directo" title="Personal directo · plantilla"
-        sub="Equipo que implementa y opera las soluciones con cada cliente. Su nómina es costo directo: plantilla × sueldo mensual (+ carga social), con inflación desde 2028 si está activa." />
       <Card eyebrow="P&L" title="Costos directos por año" sub={M.params.aplicarInflacion ? 'MXN nominales' : 'MXN sin inflación'} pad={false}>
         <ScrollX><PLTable fine compact cols={YEARS} data={A} rows={COST_ROWS} acum={R.acumY} /></ScrollX>
       </Card>
+      <PlantillaTable M={M} R={R} set={set} directo eyebrow="Costo directo" title="Personal directo · plantilla"
+        sub="Equipo que implementa y opera las soluciones con cada cliente. Su nómina es costo directo: plantilla × sueldo mensual (+ carga social), con inflación desde 2028 si está activa." />
     </div>
   );
 }
@@ -1369,7 +1384,7 @@ function CicloCard({ M, set }: { M: Model; set: (f: (m: Model) => void) => void 
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 10, marginTop: 18 }}>
         {[
-          ['Lo que implica', `Un cliente que se contacta hoy hace su primer pago en el día ${diaPago} (~${(diaPago / 30.5).toFixed(0)} meses). El equipo comercial debe generar oportunidades con ${Math.ceil(diaPago / 30.5 / 3)} trimestres de anticipación.`],
+          ['Lo que implica', `Un cliente que se contacta hoy hace su primer pago en el día ${diaPago} (~${Math.round(diaPago / 30.5)} ${Math.round(diaPago / 30.5) === 1 ? 'mes' : 'meses'}). El equipo comercial debe generar oportunidades con ${Math.ceil(diaPago / 30.5 / 3)} ${Math.ceil(diaPago / 30.5 / 3) === 1 ? 'trimestre' : 'trimestres'} de anticipación.`],
           ['Para la caja', `Durante ${diaPago} días se paga nómina, maquetas, marketing y preventa sin ingreso de ese cliente: es parte de la curva J y de la necesidad de capital.`],
           ['Para el inversionista', `El ciclo es largo, pero desde el mes ${mesMant} el cliente paga administración y mantenimiento de forma recurrente, un ingreso difícil de reemplazar.`],
         ].map(([t, d]) => (
@@ -1513,20 +1528,6 @@ function Supuestos({ M, R, set }: { M: Model; R: Result; set: (f: (m: Model) => 
   const ingresos = PARAM_DEFS.filter(p => p.g === 'Ingresos');
   return (
     <div style={{ display: 'grid', gap: 20 }}>
-      <Card eyebrow="Ingresos" title="Supuestos de ingresos">
-        <div style={{ display: 'grid', gridTemplateColumns: `repeat(${ingresos.length}, minmax(0, 1fr))`, borderTop: `1px solid ${C.line2}` }} className="axon-ing">
-          {ingresos.map((p, i) => (
-            <div key={p.k} style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: 12, padding: '14px 14px 2px', paddingLeft: i ? 14 : 0, borderLeft: i ? `1px solid ${C.line2}` : undefined }}>
-              <span style={{ font: `300 12px/1.35 ${FONT}`, color: C.ink2 }}>{p.l}</span>
-              <NumInput kind={p.kind} value={M.params[p.k] ?? 0} width={p.kind === 'money' ? 104 : 64} onChange={v => set(m => { m.params[p.k] = v; })} />
-            </div>
-          ))}
-        </div>
-      </Card>
-      <IncrementoCard M={M} R={R} set={set} cfg={INC_PRECIO} />
-      <ChurnCard M={M} R={R} set={set} />
-      <CargaCard M={M} R={R} set={set} />
-      <IncrementoCard M={M} R={R} set={set} cfg={INC_SUELDO} />
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 16 }}>
         {groups.map(gname => (
           <Card key={gname} title={gname === 'Costos' ? 'Supuestos de costos y gastos' : 'Tasas generales'}>
@@ -1553,6 +1554,20 @@ function Supuestos({ M, R, set }: { M: Model; R: Result; set: (f: (m: Model) => 
           </Card>
         ))}
       </div>
+      <Card eyebrow="Ingresos" title="Supuestos de ingresos">
+        <div style={{ display: 'grid', gridTemplateColumns: `repeat(${ingresos.length}, minmax(0, 1fr))`, borderTop: `1px solid ${C.line2}` }} className="axon-ing">
+          {ingresos.map((p, i) => (
+            <div key={p.k} style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: 12, padding: '14px 14px 2px', paddingLeft: i ? 14 : 0, borderLeft: i ? `1px solid ${C.line2}` : undefined }}>
+              <span style={{ font: `300 12px/1.35 ${FONT}`, color: C.ink2 }}>{p.l}</span>
+              <NumInput kind={p.kind} value={M.params[p.k] ?? 0} width={p.kind === 'money' ? 104 : 64} onChange={v => set(m => { m.params[p.k] = v; })} />
+            </div>
+          ))}
+        </div>
+      </Card>
+      <IncrementoCard M={M} R={R} set={set} cfg={INC_PRECIO} />
+      <ChurnCard M={M} R={R} set={set} />
+      <CargaCard M={M} R={R} set={set} />
+      <IncrementoCard M={M} R={R} set={set} cfg={INC_SUELDO} />
       <CapexCard M={M} R={R} set={set} />
       <CapitalTrabajoCard M={M} R={R} set={set} />
       <CicloCard M={M} set={set} />
@@ -1652,7 +1667,7 @@ function Valuacion({ M, R, set }: { M: Model; R: Result; set: (f: (m: Model) => 
   return (
     <div style={{ display: 'grid', gap: 20 }}>
       <FineKpis items={[
-        { label: 'Valor del capital', sub: 'Pre-money · 1-ene-2027', value: short(v.equity), note: `${v.cumple ? 'Cumple' : 'No cumple'} meta de ${short(V.meta)}`, tone: v.cumple ? 'pos' : 'neg' },
+        { label: 'Valor del capital', sub: 'Pre-money · 1-ene-2027', value: short(v.equity), hl: 'Valor de AXON', note: `${v.cumple ? 'Cumple' : 'No cumple'} meta de ${short(V.meta)}`, tone: v.cumple ? 'pos' : 'neg' },
         { label: 'Valor de la empresa', sub: 'EV', value: short(v.ev), note: `EV / Ventas 2027: ${v.evVentas.toFixed(2)}x` },
         { label: 'WACC', value: pct(v.wacc, 2), note: `Ke ${pct(v.ke, 2)} · Kd neto ${pct(v.kdAt, 2)}` },
         { label: 'Peso del valor terminal', value: pct(v.pctTv), note: isFinite(v.evEbitda) && v.ebitda[4] > 0 ? `EV / EBITDA 2030: ${v.evEbitda.toFixed(2)}x · VT / EBITDA 2030: ${v.tvEbitda.toFixed(2)}x` : 'EBITDA 2030 ≤ 0' },
@@ -1977,7 +1992,7 @@ function aiContext(M: Model, R: Result): string {
       necesidad_caja_segun_PL: Math.round(F.pl.necesidad), pico_PL: mesCorto(F.pl.mesPico),
       necesidad_con_capital_trabajo: Math.round(F.wc.necesidad),
       necesidad_con_ciclo_comercial: Math.round(F.ciclo.necesidad), pico_ciclo: mesCorto(F.ciclo.mesPico), caja_positiva_desde: F.ciclo.mesRecupera >= 0 ? mesCorto(F.ciclo.mesRecupera) : 'después de dic-30',
-      plan_disposiciones_trimestrales: (() => { const P = planDisposiciones(F, M.plan?.inicio ?? 14, M.plan?.colchonMeses ?? 1); return { inicio: mesCorto(P.inicio), colchon_meses: P.colchonMeses, capital_total: P.total, deficit_previo_ya_fondeado: Math.round(P.deficitPrevio), disposiciones: P.disp.filter(d => d.monto > 0.5).map(d => ({ trimestre: d.trimestre, monto: d.monto })) }; })(),
+      plan_disposiciones_trimestrales: (() => { const P = planDe(M, F); return { inicio_plan: mesCorto(P.inicio), primera_disposicion: mesCorto(P.primera), puente_antes_de_primera: Math.round(P.puente), colchon_meses: P.colchonMeses, capital_total: P.total, deficit_previo_ya_fondeado: Math.round(P.deficitPrevio), disposiciones: P.disp.filter(d => d.monto > 0.5).map(d => ({ trimestre: d.trimestre, monto: d.monto })) }; })(),
       egreso_mensual_promedio_2027: Math.round(F.operacionMensual), meses_de_operacion: +F.mesesOperacion.toFixed(1), credito_bancario: { monto: F.credito, estatus: 'ya dispuesto, no es dinero nuevo; prórroga: pagos de capital e intereses desde ene-27', pago_capital_2027_2030: Math.round(F.det.capitalCredito.reduce((a, b) => a + b, 0)) },
       caja_acumulada_por_anio: [13, 25, 37, 49, 61].map(t => Math.round(F.ciclo.acum[t])), acumulado_PL_por_anio: [13, 25, 37, 49, 61].map(t => Math.round(F.pl.acum[t])),
     }; })(),
@@ -2032,9 +2047,16 @@ function AIChat({ open, onClose, context }: { open: boolean; onClose: () => void
     const history: ChatMsg[] = [...msgs, { role: 'user', text: t }];
     setMsgs([...history, { role: 'assistant', text: '' }]); setDraft(''); setBusy(true); setStatus('Analizando con IA Avanzada… puede tardar unos momentos');
     const put = (f: (prev: string) => string) => setMsgs(m => { const n = [...m]; const last = n[n.length - 1]; n[n.length - 1] = { ...last, text: f(last.text) }; return n; });
+    let got = false; // ya llegó texto de la respuesta
     try {
-      const res = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ context, messages: history.filter(m => m.text).map(m => ({ role: m.role, content: m.text })) }) });
-      if (!res.ok || !res.body) throw new Error(res.status === 404 ? 'no se encontró /api/chat' : `error ${res.status}${res.status === 504 ? ': se agotó el tiempo' : ''}`);
+      // Si la conexión falla antes de llegar respuesta (servidor reiniciando, red), se reintenta solo
+      const body = JSON.stringify({ context, messages: history.filter(m => m.text).map(m => ({ role: m.role, content: m.text })) });
+      let res: Response | undefined;
+      for (let intento = 0; ; intento++) {
+        try { res = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body }); break; }
+        catch (e) { if (intento >= 2) throw e; setStatus('Reconectando con la IA…'); await new Promise(r => setTimeout(r, 2500)); }
+      }
+      if (!res || !res.ok || !res.body) throw new Error(res?.status === 404 ? 'no se encontró /api/chat' : `error ${res?.status}${res?.status === 504 ? ': se agotó el tiempo' : ''}`);
       const reader = res.body.getReader(), dec = new TextDecoder(); let buf = '';
       for (;;) {
         const { value, done } = await reader.read(); if (done) break;
@@ -2043,13 +2065,15 @@ function AIChat({ open, onClose, context }: { open: boolean; onClose: () => void
         for (const ln of lines) {
           if (!ln.trim()) continue;
           const ev = JSON.parse(ln) as { t: 'text' | 'status' | 'error' | 'done'; v?: string };
-          if (ev.t === 'text') { setStatus(''); put(p => p + ev.v); }
+          if (ev.t === 'text') { got = true; setStatus(''); put(p => p + ev.v); }
           else if (ev.t === 'status') setStatus(ev.v ?? '');
           else if (ev.t === 'error') put(p => (p ? p + '\n\n' : '') + '⚠️ ' + ev.v);
         }
       }
     } catch (e) {
-      put(p => (p ? p + '\n\n' : '') + `⚠️ No se pudo conectar con el servidor de la IA (${(e as Error).message}).`);
+      put(p => (p ? p + '\n\n' : '') + (got
+        ? '⚠️ Se cortó la conexión a media respuesta. Vuelve a enviar la pregunta.'
+        : `⚠️ No se pudo conectar con el servidor de la IA (${(e as Error).message}). Revisa tu conexión o que la app esté corriendo y vuelve a enviar la pregunta.`));
     }
     setBusy(false); setStatus('');
   };
@@ -2136,7 +2160,7 @@ function AIChat({ open, onClose, context }: { open: boolean; onClose: () => void
 
 // ===================== Plataforma =====================
 const MODULES = [
-  { id: 'resumen', l: 'Resumen' }, { id: 'pl', l: 'P&L' }, { id: 'costos', l: 'Costos' }, { id: 'gastos', l: 'Gastos' }, { id: 'credito', l: 'Crédito bancario' }, { id: 'valuacion', l: 'Valuación' }, { id: 'flujo', l: 'Necesidad de capital' }, { id: 'mercado', l: 'Mercado' }, { id: 'supuestos', l: 'Supuestos' },
+  { id: 'resumen', l: 'Resumen' }, { id: 'pl', l: 'P&L' }, { id: 'costos', l: 'Costos' }, { id: 'gastos', l: 'Gastos' }, { id: 'credito', l: 'Crédito bancario' }, { id: 'valuacion', l: 'Valuación' }, { id: 'flujo', l: 'Necesidad de capital' }, { id: 'supuestos', l: 'Supuestos' }, { id: 'mercado', l: 'Mercado' },
 ] as const;
 type ModId = typeof MODULES[number]['id'];
 
@@ -2208,7 +2232,22 @@ export default function AxonPLForecast() {
     const h = (typeof location !== 'undefined' ? location.hash.slice(1) : '') as ModId;
     return MODULES.some(m => m.id === h) ? h : 'resumen';
   });
-  useEffect(() => { try { localStorage.setItem(STORE, JSON.stringify(M)); } catch { /* sin almacenamiento */ } }, [M]);
+  // Los cambios se guardan solo al pulsar "Guardar"
+  const [saved, setSaved] = useState(() => JSON.stringify(M));
+  const unsaved = useMemo(() => JSON.stringify(M) !== saved, [M, saved]);
+  const [justSaved, setJustSaved] = useState(false);
+  const save = () => {
+    const s = JSON.stringify(M);
+    try { localStorage.setItem(STORE, s); } catch { /* sin almacenamiento */ }
+    // En local también queda como versión de inicio (src/data/model.json) para el commit
+    if (import.meta.env.DEV) fetch('/api/guardar-modelo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: s }).catch(() => { /* */ });
+    setSaved(s); setJustSaved(true); setTimeout(() => setJustSaved(false), 1800);
+  };
+  useEffect(() => {
+    if (!unsaved) return;
+    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', warn); return () => window.removeEventListener('beforeunload', warn);
+  }, [unsaved]);
   useEffect(() => {
     const on = () => { const h = location.hash.slice(1) as ModId; if (MODULES.some(m => m.id === h)) setMod(h); };
     window.addEventListener('hashchange', on); return () => window.removeEventListener('hashchange', on);
@@ -2249,9 +2288,17 @@ export default function AxonPLForecast() {
             <span style={{ font: `650 10.5px ${FONT}`, letterSpacing: '.1em', padding: '4px 9px', borderRadius: 999, border: `1px solid ${C.ink}`, color: C.ink }}>CONFIDENCIAL</span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 18, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+            <button onClick={save} title="Guardar la versión actual en este navegador"
+              style={{ ...btn, minWidth: 112, background: C.ink, color: '#fff', borderColor: C.ink }}>
+              {justSaved ? 'Guardado ✓' : unsaved ? 'Guardar •' : 'Guardar'}
+            </button>
+            {unsaved && <button style={{ border: 0, background: 'transparent', padding: '2px 2px', cursor: 'pointer', font: `300 11.5px ${FONT}`, color: C.faint, textDecoration: 'underline', textDecorationColor: C.line, textUnderlineOffset: 3 }}
+              onClick={() => { const m: Model = JSON.parse(saved); setM(m); }}>Volver a lo último guardado</button>}
             {dirty && (confirmReset
               ? <span style={{ display: 'flex', gap: 6 }}><button style={{ ...btn, background: C.ink, color: '#fff', borderColor: C.ink }} onClick={() => { setM(clone(DEFAULT)); setConfirmReset(false); }}>Confirmar</button><button style={btn} onClick={() => setConfirmReset(false)}>Cancelar</button></span>
               : <button style={{ border: 0, background: 'transparent', padding: '4px 2px', cursor: 'pointer', font: `300 11.5px ${FONT}`, color: C.faint, textDecoration: 'underline', textDecorationColor: C.line, textUnderlineOffset: 3 }} onClick={() => setConfirmReset(true)}>Restablecer supuestos</button>)}
+            </div>
             <AIButton onClick={() => setAiOpen(true)} />
           </div>
         </div>

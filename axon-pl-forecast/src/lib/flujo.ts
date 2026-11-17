@@ -227,12 +227,14 @@ export const INICIOS = Array.from({ length: N_MESES }, (_, t) => t).filter(esIni
 
 export interface Disposicion { t: number; trimestre: string; monto: number; acumulado: number; flujoOperativo: number; banco: number; cajaCierre: number; cajaMinima: number }
 export interface Plan {
-  inicio: number; colchon: number; colchonMeses: number;
+  inicio: number; primera: number; colchon: number; colchonMeses: number;
   banco: number[];               // pago de capital del crédito (−), mes a mes
   caja: number[];                // caja mes a mes con el plan (desde el inicio)
-  disp: Disposicion[];           // un renglón por trimestre desde el inicio
+  disp: Disposicion[];           // un renglón por periodo desde el inicio
+  cortes: number[];              // meses en que inicia cada periodo trimestral (desde la primera disposición)
   total: number; n: number; mayor: number; ultima: string;
   deficitPrevio: number;         // caja consumida antes del inicio del plan (ya fondeada)
+  puente: number;                // caja negativa máxima entre el inicio y la primera disposición (a cubrir con la primera)
 }
 
 /** Crédito bancario: ya dispuesto, NO entra dinero. Por la prórroga, el capital se paga cada mes a partir de ene-27 */
@@ -242,18 +244,28 @@ export function pagoCapitalCredito(R: Result): number[] {
   return b;
 }
 
-export function planDisposiciones(F: Flujo, inicio = N_Y1, colchonMeses = 1): Plan {
+export function planDisposiciones(F: Flujo, inicio = N_Y1, colchonMeses = 1, primera = inicio): Plan {
   // El flujo de caja real ya descuenta el pago de capital del crédito; no hay desembolso nuevo
   const banco = F.det.capitalCredito.map(v => -v);
   const neto = F.ciclo.neto;
   const colchon = colchonMeses * F.operacionMensual;
+  primera = Math.max(inicio, Math.min(N_MESES - 1, primera));
   let acc0 = 0, min0 = 0; for (let t = 0; t < inicio; t++) { acc0 += neto[t]; min0 = Math.min(min0, acc0); }
   const deficitPrevio = Math.max(0, -min0); // punto más bajo de la caja antes de iniciar el plan
   const caja = zeros(); const disp: Disposicion[] = [];
-  let c = 0, acumulado = 0;
-  for (let t = inicio; t < N_MESES; ) {
-    let fin = t + 1; while (fin < N_MESES && !esInicioTrimestre(fin)) fin++;
-    // Lo justo para que ningún mes del trimestre quede por debajo del colchón
+  let c = 0, acumulado = 0, minPre = 0;
+  // Entre el inicio del plan y la primera disposición la caja corre sin capital nuevo (se acumula el hueco)
+  if (primera > inicio) {
+    let op = 0, bq = 0, minCon = Infinity;
+    for (let k = inicio; k < primera; k++) { c += neto[k]; caja[k] = c; minCon = Math.min(minCon, c); op += neto[k] - banco[k]; bq += banco[k]; }
+    minPre = minCon;
+    disp.push({ t: inicio, trimestre: `${mesCorto(inicio)} a ${mesCorto(primera - 1)}`, monto: 0, acumulado: 0, flujoOperativo: op, banco: bq, cajaCierre: c, cajaMinima: minCon });
+  }
+  // Desde la primera disposición: una cada 3 meses, lo justo para que ningún mes del periodo quede por debajo del colchón
+  const cortes: number[] = [];
+  for (let t = primera; t < N_MESES; t += 3) {
+    cortes.push(t);
+    const fin = Math.min(N_MESES, t + 3);
     let x = c, minSin = Infinity; for (let k = t; k < fin; k++) { x += neto[k]; minSin = Math.min(minSin, x); }
     const falta = Math.max(0, colchon - minSin);
     const monto = falta > 0.5 ? Math.ceil(falta / REDONDEO) * REDONDEO : 0;
@@ -261,8 +273,7 @@ export function planDisposiciones(F: Flujo, inicio = N_Y1, colchonMeses = 1): Pl
     let minCon = Infinity, op = 0, bq = 0;
     for (let k = t; k < fin; k++) { c += neto[k]; caja[k] = c; minCon = Math.min(minCon, c); op += neto[k] - banco[k]; bq += banco[k]; }
     disp.push({ t, trimestre: trimestre(t), monto, acumulado, flujoOperativo: op, banco: bq, cajaCierre: c, cajaMinima: minCon });
-    t = fin;
   }
   const con = disp.filter(d => d.monto > 0.5);
-  return { inicio, colchon, colchonMeses, banco, caja, disp, total: acumulado, n: con.length, mayor: Math.max(0, ...con.map(d => d.monto)), ultima: con.length ? con[con.length - 1].trimestre : '—', deficitPrevio };
+  return { inicio, primera, colchon, colchonMeses, banco, caja, disp, cortes, total: acumulado, n: con.length, mayor: Math.max(0, ...con.map(d => d.monto)), ultima: con.length ? con[con.length - 1].trimestre : '—', deficitPrevio, puente: Math.max(0, -minPre) };
 }

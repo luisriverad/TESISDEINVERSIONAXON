@@ -4,17 +4,9 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 
-// Carpeta con los PDFs de referencia que la IA lee en cada pregunta
+// Carpeta con el prompt de la IA. La IA ya NO lee PDFs ni busca en la web:
+// analiza únicamente las cifras vivas del modelo de la plataforma.
 export const DOCS_DIR = path.resolve(process.cwd(), 'docs-ia');
-type Doc = { name: string; data: string };
-let docsCache: { key: string; docs: Doc[] } = { key: '', docs: [] };
-function loadDocs(): Doc[] {
-  if (!fs.existsSync(DOCS_DIR)) return [];
-  const files = fs.readdirSync(DOCS_DIR).filter(f => f.toLowerCase().endsWith('.pdf')).sort();
-  const key = files.map(f => `${f}:${fs.statSync(path.join(DOCS_DIR, f)).mtimeMs}`).join('|');
-  if (key !== docsCache.key) docsCache = { key, docs: files.map(f => ({ name: f.replace(/\.pdf$/i, ''), data: fs.readFileSync(path.join(DOCS_DIR, f)).toString('base64') })) };
-  return docsCache.docs;
-}
 
 const MODEL = 'claude-opus-5-5';
 
@@ -22,7 +14,6 @@ const SYSTEM = `Eres Axon Intelligence, el asesor financiero y estratégico de A
 
 Tu trabajo:
 - Responder con rigor sobre el modelo financiero: P&L, supuestos, gastos, crédito, flujo libre, WACC, valuación por DFC y sensibilidades.
-- Analizar el mercado objetivo (empresas con ventas mayores a US$5M en EUA hispano y Latinoamérica) y las perspectivas del negocio de IA empresarial.
 - Ayudar a decidir: cuando te pidan una recomendación, da una postura clara, explica el porqué con cifras del modelo y señala los riesgos y qué supuesto la cambiaría.
 
 Cómo responder:
@@ -30,10 +21,9 @@ Cómo responder:
 - Usa las cifras exactas del contexto del modelo. Montos en MXN salvo que se indique otra moneda; abrevia con $M (millones) y $k (miles).
 - Si haces cálculos propios (por ejemplo, qué crecimiento haría falta para una meta), muestra el razonamiento en pocos pasos y di que es una estimación tuya, no una cifra del modelo.
 - Distingue siempre entre lo que dice el modelo, lo que viene de fuentes externas y tu opinión.
-- Puedes buscar en la web para datos de mercado, competencia, tendencias o tasas actuales; cita la fuente brevemente.
 - Usa listas cortas o tablas sencillas en Markdown cuando ayuden; evita respuestas larguísimas salvo que te pidan detalle.
 - Si algo no está en el modelo ni lo puedes verificar, dilo; no inventes cifras.
-- Al inicio de la conversación recibes documentos de referencia de AXON (PDF). Úsalos como fuente principal para la tesis de inversión, el producto, la estrategia y el mercado; cuando los uses, menciona de qué documento sale la información. Si un documento contradice las cifras vivas del modelo, señálalo y da prioridad al modelo para los números.`;
+- Tu ÚNICA fuente de información son las cifras vivas del modelo que recibes en JSON. No hay documentos de referencia ni búsqueda web; si falta un dato, dilo.`;
 
 // Si existe docs-ia/PROMPT.md, sus instrucciones reemplazan a las de arriba (se lee en cada pregunta)
 function systemPrompt(): string {
@@ -55,7 +45,7 @@ export function chatHandler(getKey: () => string | undefined) {
   return async (req: IncomingMessage, res: ServerResponse, next: () => void) => {
     if (req.url === '/api/docs' && req.method === 'GET') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify(loadDocs().map(d => d.name)));
+      return res.end('[]');
     }
     if (req.url !== '/api/chat' || req.method !== 'POST') return next();
     const send = (o: object) => res.write(JSON.stringify(o) + '\n');
@@ -73,14 +63,9 @@ export function chatHandler(getKey: () => string | undefined) {
       const context = typeof body.context === 'string' ? body.context.slice(0, 200000) : '{}';
       if (!messages.length || messages[messages.length - 1].role !== 'user') { send({ t: 'error', v: 'Mensaje vacío.' }); return res.end(); }
       const client = new Anthropic({ apiKey });
-      // Primer turno: documentos (estables, en caché) y después las cifras vivas del modelo
-      const docs = loadDocs();
-      const intro: Anthropic.Beta.BetaContentBlockParam[] = docs.map((d, i) => ({
-        type: 'document' as const, title: d.name,
-        source: { type: 'base64' as const, media_type: 'application/pdf' as const, data: d.data },
-        ...(i === docs.length - 1 ? { cache_control: { type: 'ephemeral' as const } } : {}),
-      }));
-      intro.push({ type: 'text', text: `${docs.length ? `Arriba están los documentos de referencia de AXON: ${docs.map(d => `"${d.name}"`).join(', ')}.\n\n` : ''}Fecha de hoy: ${new Date().toLocaleDateString('es-MX', { day: 'numeric', month: 'long', year: 'numeric' })}.\n\nContexto actual del modelo financiero interactivo (cifras vivas de la herramienta, en JSON):\n${context}` });
+      // Primer turno: únicamente las cifras vivas del modelo (fuente única del análisis)
+      const intro: Anthropic.Beta.BetaContentBlockParam[] = [];
+      intro.push({ type: 'text', text: `Fecha de hoy: ${new Date().toLocaleDateString('es-MX', { day: 'numeric', month: 'long', year: 'numeric' })}.\n\nContexto actual del modelo financiero interactivo (cifras vivas de la herramienta, en JSON). Es tu ÚNICA fuente de información:\n${context}` });
       const convo: Anthropic.Beta.BetaMessageParam[] = [{ role: 'user', content: intro }, ...messages.slice(-30).map(m => ({ role: m.role, content: m.content }))];
 
       // El modelo puede pausar el turno tras usar la búsqueda web; se reanuda hasta 4 veces.
@@ -93,13 +78,11 @@ export function chatHandler(getKey: () => string | undefined) {
           output_config: { effort: 'high' },
           system: [{ type: 'text', text: systemPrompt() }],
           cache_control: { type: 'ephemeral' },
-          tools: [{ type: 'web_search_20260209', name: 'web_search', max_uses: 5 }],
           messages: convo,
         });
         const abort = () => stream.abort(); req.on('close', abort);
         for await (const ev of stream) {
-          if (ev.type === 'content_block_start' && ev.content_block.type === 'server_tool_use') send({ t: 'status', v: 'Buscando en la web…' });
-          else if (ev.type === 'content_block_start' && ev.content_block.type === 'text') send({ t: 'status', v: '' });
+          if (ev.type === 'content_block_start' && ev.content_block.type === 'text') send({ t: 'status', v: '' });
           else if (ev.type === 'content_block_delta' && ev.delta.type === 'text_delta') send({ t: 'text', v: ev.delta.text });
         }
         const final = await stream.finalMessage();

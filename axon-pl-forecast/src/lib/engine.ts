@@ -49,7 +49,7 @@ export interface Model {
   /** Migraciones de datos guardados que ya se aplicaron */
   migr?: Record<string, boolean>;
   /** Plan de disposiciones trimestrales del capital nuevo: mes de inicio (índice desde nov-25) y colchón de caja en meses */
-  plan?: { inicio: number; colchonMeses: number };
+  plan?: { inicio: number; colchonMeses: number; primera?: number };
 }
 export interface Etapa { etapa: string; dias: number }
 
