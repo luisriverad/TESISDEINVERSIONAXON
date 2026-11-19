@@ -255,7 +255,7 @@ export const INICIOS = Array.from({ length: N_MESES }, (_, t) => t).filter(esIni
 export interface Disposicion { t: number; trimestre: string; monto: number; acumulado: number; flujoOperativo: number; banco: number; cajaCierre: number; cajaMinima: number }
 export interface Plan {
   inicio: number; primera: number; colchon: number; colchonMeses: number;
-  cobertura: number;             // reserva adicional que entra con la primera disposición y se conserva en caja
+  cobertura: number;             // gastos de estructuración: se suman a la primera disposición y se pagan ese mismo mes
   banco: number[];               // pago de capital del crédito (−), mes a mes
   caja: number[];                // caja mes a mes con el plan (desde el inicio)
   disp: Disposicion[];           // un renglón por periodo desde el inicio
@@ -295,10 +295,11 @@ export function planDisposiciones(F: Flujo, inicio = N_Y1, colchonMeses = 1, pri
     cortes.push(t);
     const fin = Math.min(N_MESES, t + 3);
     let x = c, minSin = Infinity; for (let k = t; k < fin; k++) { x += neto[k]; minSin = Math.min(minSin, x); }
-    // La cobertura se suma una sola vez (primera disposición) y se mantiene como reserva: no reduce las siguientes
-    const falta = Math.max(0, colchon + cobertura - minSin);
-    const monto = falta > 0.5 ? Math.ceil(falta / REDONDEO) * REDONDEO : 0;
-    acumulado += monto; c += monto;
+    const falta = Math.max(0, colchon - minSin);
+    // Gastos de estructuración del capital nuevo: se suman a la primera disposición y salen de caja ese mismo mes
+    const gEst = t === primera ? Math.max(0, cobertura) : 0;
+    const monto = (falta > 0.5 ? Math.ceil(falta / REDONDEO) * REDONDEO : 0) + gEst;
+    acumulado += monto; c += monto - gEst;
     let minCon = Infinity, op = 0, bq = 0;
     for (let k = t; k < fin; k++) { c += neto[k]; caja[k] = c; minCon = Math.min(minCon, c); op += neto[k] - banco[k]; bq += banco[k]; }
     disp.push({ t, trimestre: trimestre(t), monto, acumulado, flujoOperativo: op, banco: bq, cajaCierre: c, cajaMinima: minCon });

@@ -43,6 +43,8 @@ export interface Val {
   bono: number; spread: number; betaU: number; dPeso: number; prima: number; pais: number; tamano: number; startup: number;
   da: number; capex: number; ct: number; g: number; caja: number; escenario: number;
   volBase: number[]; volMeta: number[]; precioBase: number[]; precioMeta: number[]; meta: number;
+  /** % de clientes nuevos 2028–2030 que son transnacionales (el resto, empresas medianas). Sin definir: la mezcla de la cartera 2027 */
+  mixTrans?: number[];
   /** Capital de trabajo operativo por días; sin definir usa ct (% del aumento en ventas) */
   wc?: WC;
   /** Valor terminal con convenciones de mercado: flujo normalizado (capital de trabajo a ritmo g, CAPEX de reposición = D&A) y descuento a mitad de año. Sin definir: como el Excel */
@@ -146,6 +148,8 @@ export interface Result {
   scen: { vol: number[]; precio: number[]; factor: number[]; label: string };
   /** Aumento de precio efectivo del desarrollo inicial 2028–2030 vs. el año anterior */
   precioEfectivo: number[];
+  /** % de transnacionales en la cartera 2027 (referencia de la mezcla) */
+  mix27: number;
   v: {
     rf: number; betaL: number; ke0: number; ke: number; kdAt: number; de: number; wacc: number; primaMkt: number;
     ventas: number[]; ebitda: number[]; daA: number[]; ebit: number[]; isrA: number[]; nopat: number[]; capexA: number[]; ctA: number[]; fcff: number[];
@@ -227,6 +231,12 @@ export function compute(M: Model): Result {
   const S1 = finish(m1, n1);
   S1.un = S1.uai.map((v, i) => v - S1.isr[i]);
 
+  // Mezcla de la cartera 2027 (clientes capturados con precio de transnacional vs. de empresa mediana)
+  const tieneTok = (c: Client, t: Tok) => c.dev2.includes(t) || c.mant2.includes(t);
+  const nTrans = M.clients.filter(c => tieneTok(c, 'DEV_MARCA') || tieneTok(c, 'MANT_TRANS')).length;
+  const nMed = M.clients.filter(c => !(tieneTok(c, 'DEV_MARCA') || tieneTok(c, 'MANT_TRANS')) && (tieneTok(c, 'DEV_GRUPO') || tieneTok(c, 'MANT_MEDIANA'))).length;
+  const mix27 = nTrans + nMed ? nTrans / (nTrans + nMed) : 0;
+
   // ---------- Año 2 (mensual) ----------
   // Churn: el contrato de mantenimiento es anual, así que la mensualidad de cada cliente se mantiene igual
   // todos los meses de 2027; la pérdida de clientes se aplica al renovar (cada año, desde 2028)
@@ -249,8 +259,10 @@ export function compute(M: Model): Result {
   // Aumento de precio efectivo de cada año vs. el anterior (2028–2030), para mostrarlo en Supuestos
   const precioEfectivo = [2, 3, 4].map(y => pAnio(y) / pAnio(y - 1) * (precioSlider ? 1 : 1 + precio[y - 2]) - 1);
   const sInc = P.sueldoInc ?? 0, sDesde = P.sueldoDesde ?? 0;
-  const sMesY2 = (i: number) => 1 + (i >= sDesde ? sInc : 0);
-  const sAnio = (y: number) => 1 + sInc * Math.min(12, Math.max(0, 12 * y - sDesde)) / 12;
+  // Incremento de sueldos ANUAL: sube sInc en el mes elegido y otra vez en cada aniversario (no mes a mes)
+  const fSueldo = (t: number) => (t >= sDesde ? Math.pow(1 + sInc, Math.floor((t - sDesde) / 12) + 1) : 1); // t: meses desde ene-27
+  const sMesY2 = (i: number) => fSueldo(i);
+  const sAnio = (y: number) => Array.from({ length: 12 }, (_, k) => fSueldo(12 * (y - 1) + k)).reduce((a, b) => a + b, 0) / 12; // y: 1 = 2027 … 4 = 2030
   const baseDev2 = r12.map(i => sum(clientsY2.map(c => c.dev[i])));
   const baseMant2 = r12.map(i => sum(clientsY2.map(c => c.mant[i])));
   m2.dev = baseDev2.map((v, i) => v * pMesY2(i));
@@ -298,12 +310,20 @@ export function compute(M: Model): Result {
   A.empresas![1] = Math.round(clientsY2.reduce((s, c) => s + (c.mant[11] > 0 ? c.survDic : 0), 0));
   // Ingresos sin el incremento de precios; el incremento se aplica encima según el año
   const bDev = [0, sum(baseDev2)], bMant = [0, sum(baseMant2)];
+  // Mezcla transnacionales vs. medianas de los clientes nuevos 2028–2030, relativa a la mezcla de la cartera 2027:
+  // cambia el precio promedio del desarrollo y la mensualidad promedio de los clientes que se suman
+  const precioProm = (x: number) => x * P.devMarca + (1 - x) * P.devGrupo;
+  const mantProm = (x: number) => x * (P.mantTrans ?? 0) + (1 - x) * (P.mantMediana ?? 0);
+  const mixAnio = (j: number) => Math.min(1, Math.max(0, V.mixTrans?.[j] ?? mix27));
+  const fMixDev = (j: number) => (precioProm(mix27) ? precioProm(mixAnio(j)) / precioProm(mix27) : 1);
+  const fMixMant = (j: number) => (mantProm(mix27) ? mantProm(mixAnio(j)) / mantProm(mix27) : 1);
   for (let y = 2; y < 5; y++) {
     const j = y - 2, e = y - 1; // j: índice escenario; e: exponente inflación
     bDev[y] = bDev[y - 1] * (1 + vol[j]) * (1 + precio[j]);
-    bMant[y] = bMant[y - 1] * (1 + vol[j]) * (1 - churn);
+    // Base que renueva (1 − churn) + clientes nuevos (vol) con la mensualidad promedio de su mezcla
+    bMant[y] = bMant[y - 1] * (1 - churn) * (1 + vol[j] * fMixMant(j));
     const fp = Math.pow(1 + infP, e);
-    A.dev![y] = bDev[y] * pAnio(y) * fp;
+    A.dev![y] = bDev[y] * pAnio(y) * fp * fMixDev(j);
     A.mant![y] = bMant[y] * fp; // las mensualidades suben con la inflación, pero no con los incrementos de precio
     A.otros![y] = A.otros![y - 1] * (1 + vol[j]);
     A.empresas![y] = Math.round(A.empresas![y - 1] * (1 + vol[j]) * (1 - churn));
@@ -403,6 +423,7 @@ export function compute(M: Model): Result {
     m1: S1, m2: S2, annual: SA, acum1, acum2, acumY, cred, clientsY2,
     scen: { vol, precio: precioEfectivo, factor, label },
     precioEfectivo,
+    mix27,
     v: {
       rf, betaL, ke0, ke, kdAt, de, wacc, primaMkt, ventas, ebitda, daA, ebit, isrA, nopat, capexA, ctA, fcff, periodo, factor: fac, pv,
       wc: { cxc, inv, cxp, ctn },
