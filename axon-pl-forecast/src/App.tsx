@@ -995,7 +995,6 @@ function MezclaIngreso({ M, R, F, PL, set }: { M: Model; R: Result; F: Flujo; PL
       <div style={{ marginTop: 18, padding: '14px 16px', border: `1px solid ${C.line}`, display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
         <span>
           <span style={{ display: 'block', font: `650 10px ${FONT}`, letterSpacing: '.16em', textTransform: 'uppercase', color: C.ink }}>Mezcla de clientes nuevos · % transnacionales</span>
-          <span style={{ font: `300 11px ${FONT}`, color: C.faint }}>El resto son empresas medianas. Cambia el precio promedio del desarrollo y la mensualidad de los clientes que se suman cada año.</span>
         </span>
         <span style={{ display: 'flex', gap: 14, alignItems: 'flex-end' }}>
           <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
@@ -1076,7 +1075,7 @@ function FlujoTab({ M, R, set }: { M: Model; R: Result; set: (f: (m: Model) => v
         { label: '+ Crédito, CAPEX y capital de trabajo', sub: `Pago de capital · CAPEX · cobro ${M.val.wc?.dso ?? 30} d · pago ${M.val.wc?.dpo ?? 30} d`, value: short(F.wc.necesidad), note: `+${short(F.plb.necesidad - F.pl.necesidad)} crédito y CAPEX, +${short(Math.max(0, F.wc.necesidad - F.plb.necesidad))} días de cartera y proveedores` },
         { label: '+ Ciclo comercial', sub: 'Necesidad máxima de caja', value: short(F.ciclo.necesidad), note: `Pico en ${mesCorto(F.ciclo.mesPico)} · ${F.ciclo.mesRecupera >= 0 ? `caja positiva desde ${mesCorto(F.ciclo.mesRecupera)}` : 'aún negativa a dic-30'}`, tone: 'neg' },
         { label: 'Equivale a', sub: 'Egreso mensual promedio 2027', value: F.mesesOperacion.toFixed(1), unit: 'meses', note: `${short(F.operacionMensual)} al mes de egreso operativo (sin capital del crédito ni CAPEX)` },
-        { label: 'Capital nuevo total', sub: `Plan de disposiciones desde ${mesCorto(PL.primera)}`, value: short(PL.total), hl: 'Necesidad de nuevo capital', note: `${PL.n} disposiciones trimestrales · incluye colchón de ${short(PL.colchon)}${PL.cobertura ? `, gastos de estructuración de ${short(PL.cobertura)}` : ''}${finDso > 0.5 ? ` y ${short(finDso)} para financiar el cobro a ${M.val.wc?.dso} días` : ''}` },
+        { label: 'Capital nuevo total', sub: `Plan de disposiciones desde ${mesCorto(PL.primera)}`, value: short(PL.total), hl: 'Necesidad de nuevo capital', note: `${PL.n} disposiciones trimestrales = operación ${short(Math.max(0, PL.total - PL.colchon - PL.cobertura - Math.max(0, finDso)))} + cobro a ${M.val.wc?.dso ?? 0} días ${short(Math.max(0, finDso))} + colchón ${short(PL.colchon)} + estructuración ${short(PL.cobertura)}` },
         { label: 'Participación del inversionista', sub: 'Post-money', value: pct(ratio(PL.total, R.v.equity + PL.total), 1), hl: 'Para quien mete el capital', note: `${short(PL.total)} sobre post-money de ${short(R.v.equity + PL.total)} (pre-money ${short(R.v.equity)} de Valuación)` },
       ]} />
 
